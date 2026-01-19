@@ -1,19 +1,19 @@
 {
-  "name": "trmnl-melbourne-pt-ultimate-plusplus",
-  "version": "4.0.0",
-  "description": "ULTIMATE++ Melbourne PT Display - Quad-tier fallback with TramTracker + Auto-Config",
+  "name": "trmnl-ultimate-plusplus",
+  "version": "1.0.0",
+  "description": "Melbourne PT Dashboard for TRMNL",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["trmnl", "melbourne", "ptv", "tramtracker", "e-ink"],
-  "author": "Angus",
-  "license": "MIT",
   "dependencies": {
-    "express": "^4.18.2",
+    "axios": "^1.6.0",
     "canvas": "^2.11.2",
-    "axios": "^1.6.2",
-    "gtfs-realtime-bindings": "^1.1.2"
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "gtfs-realtime-bindings": "^1.1.1",
+    "node-html-to-image": "^4.0.0"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -1,104 +1,130 @@
-/**
- * ULTIMATE++ Data Scraper (Night Owl Edition)
- * * FEATURES:
- * 1. NIGHT MODE: If no trains found, returns "Next at X" message.
- * 2. WEATHER FIX: Better error handling for OpenWeather.
- */
-
 const axios = require('axios');
 const crypto = require('crypto');
 const RssParser = require('rss-parser');
 
 class DataScraper {
   constructor() {
-    this.userAgents = ['Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'];
+    this.userAgents = ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'];
     this.parser = new RssParser({ headers: { 'User-Agent': this.userAgents[0] } });
     
-    // API CONFIG
     this.keys = {
       ptvDevId: process.env.PTV_DEV_ID || null,
       ptvKey: process.env.PTV_KEY || null,
       weather: process.env.WEATHER_KEY || null
     };
 
-    this.cache = { lastApiCall: 0, weather: null };
+    // STATIC BACKUP SCHEDULE (Minutes past the hour)
+    this.staticSchedule = {
+        tram58: [2, 12, 22, 32, 42, 52], 
+        trainLoop: [4, 11, 19, 26, 34, 41, 49, 56]
+    };
+
+    this.cache = { lastApiCall: 0, rawTrains: [], rawTrams: [], weather: null, news: '' };
+    this.ids = { trainStop: 1120, tramStop: 2189 };
   }
 
   async fetchAllData() {
     const now = Date.now();
-    // Refresh Data if > 60s old
+    // 60s Cache Strategy
     if ((now - this.cache.lastApiCall) > 60000) {
         console.log("⚡ Fetching fresh data...");
         await this.refreshExternalData();
     }
 
     return {
-        trains: this.recalculateMinutes(this.cache.rawTrains),
-        trams: this.recalculateMinutes(this.cache.rawTrams),
+        trains: this.formatResults(this.cache.rawTrains),
+        trams: this.formatResults(this.cache.rawTrams),
         weather: this.cache.weather || { temp: '--', condition: '', icon: '?' },
-        news: 'Updated: ' + new Date().toLocaleTimeString('en-AU', {timeZone:'Australia/Melbourne'})
+        news: this.cache.news || 'Operating Normally'
     };
   }
 
-  recalculateMinutes(items) {
+  formatResults(items) {
       if (!items) return [];
       const now = new Date();
       return items.map(item => {
-          const minutes = Math.round((new Date(item.exactTime) - now) / 60000);
+          const msDiff = new Date(item.exactTime) - now;
+          const minutes = Math.round(msDiff / 60000);
           return { ...item, minutes }; 
       })
-      .filter(i => i.minutes >= -2) // Show departing trains for 2 mins
+      .filter(i => i.minutes >= -2)
       .sort((a, b) => a.minutes - b.minutes);
   }
 
   async refreshExternalData() {
-    // Parallel Fetch
-    const [trains, trams, weather] = await Promise.all([
-      this.fetchTrains().catch(e => []),
-      this.fetchTrams().catch(e => []),
-      this.getRealWeather().catch(e => null)
-    ]);
+    // 1. TRAINS (API -> Static Fallback)
+    let trains = await this.fetchPtvDepartures(0, this.ids.trainStop, [3]);
+    if (trains.length === 0) {
+        console.log("⚠️ PTV API unavailable. Using Static Train Schedule.");
+        trains = this.getStaticDepartures(this.staticSchedule.trainLoop, "Parliament (Sched)");
+    }
+
+    // 2. TRAMS (TramTracker -> Static Fallback)
+    let trams = await this.fetchTramTracker();
+    if (trams.length === 0) {
+         console.log("⚠️ TramTracker empty. Using Static Tram Schedule.");
+         trams = this.getStaticDepartures(this.staticSchedule.tram58, "West Coburg (Sched)");
+    }
+
+    // 3. WEATHER & NEWS
+    let weather = await this.getRealWeather().catch(e => null);
+    let news = await this.getServiceAlerts().catch(e => "Good Service");
 
     this.cache.rawTrains = trains;
     this.cache.rawTrams = trams;
     if (weather) this.cache.weather = weather;
+    this.cache.news = news;
     this.cache.lastApiCall = Date.now();
   }
 
-  // --- TRAINS ---
-  async fetchTrains() {
-    if (!this.keys.ptvDevId) return []; // Fallback if no key
+  getStaticDepartures(minutesArray, destination) {
+      const now = new Date();
+      const melTime = new Date(now.getTime() + (11 * 60 * 60 * 1000)); 
+      const currentMin = melTime.getUTCMinutes();
+      const departures = [];
+
+      for (let m of minutesArray) {
+          if (m > currentMin) {
+              const departureTime = new Date(now.getTime() + (m - currentMin) * 60000);
+              departures.push({ destination, exactTime: departureTime.getTime(), isScheduled: true });
+          }
+      }
+      for (let m of minutesArray) {
+          const minutesUntil = (60 - currentMin) + m;
+          const departureTime = new Date(now.getTime() + minutesUntil * 60000);
+          departures.push({ destination, exactTime: departureTime.getTime(), isScheduled: true });
+      }
+      return departures.slice(0, 3);
+  }
+
+  async fetchPtvDepartures(routeType, stopId, platforms) {
+    if (!this.keys.ptvDevId) return [];
     try {
-      // 1120 = South Yarra
-      const url = this.getPtvUrl(`/v3/departures/route_type/0/stop/1120`, {
-        platform_numbers: [3], max_results: 6, expand: ['run', 'route']
-      });
+      let urlStr = `/v3/departures/route_type/${routeType}/stop/${stopId}?max_results=6&expand=run&expand=route`;
+      if (platforms) platforms.forEach(p => urlStr += `&platform_numbers=${p}`);
+      const url = this.getPtvUrl(urlStr);
       const response = await axios.get(url);
       const rawData = [];
-      
       if (response.data?.departures) {
           for (const dep of response.data.departures) {
             const run = response.data.runs[dep.run_ref];
-            // Filter: Must be Loop or City
-            if (run?.destination_name.includes('Flinders St')) continue; 
-
+            if (routeType === 0 && run?.destination_name.includes('Flinders St')) continue;
             let departureTime = new Date(dep.estimated_departure_utc || dep.scheduled_departure_utc);
             rawData.push({
                 destination: 'Parliament',
-                exactTime: departureTime.getTime()
+                exactTime: departureTime.getTime(),
+                isScheduled: false
             });
           }
       }
       return rawData;
-    } catch (e) { console.error("PTV Error", e.message); return []; }
+    } catch (e) { return []; }
   }
 
-  // --- TRAMS ---
-  async fetchTrams() {
+  async fetchTramTracker() {
      try {
-        // Stop 2189 = Tivoli Rd
         const response = await axios.get('https://www.tramtracker.com.au/Controllers/GetNextPredictionsForStop.ashx', {
-            params: { stopNo: 2189, routeNo: 58, isLowFloor: false },
+            params: { stopNo: this.ids.tramStop, routeNo: 58, isLowFloor: false },
             headers: { 'User-Agent': this.userAgents[0] }
         });
         const rawData = [];
@@ -108,7 +134,8 @@ class DataScraper {
             if (pred && pred.minutes) {
                 rawData.push({
                     destination: pred.destination || 'West Coburg',
-                    exactTime: now + (parseFloat(pred.minutes) * 60000)
+                    exactTime: now + (parseFloat(pred.minutes) * 60000),
+                    isScheduled: false
                 });
             }
         }
@@ -116,35 +143,30 @@ class DataScraper {
      } catch (e) { return []; }
   }
 
-  // --- WEATHER ---
+  async getServiceAlerts() {
+    try {
+      const feed = await this.parser.parseURL('https://www.ptv.vic.gov.au/feeds/rss/lines/2');
+      const relevant = feed.items.find(item => item.title && ['Cranbourne', 'Pakenham', 'Frankston', 'Sandringham'].some(line => item.title.includes(line)));
+      if (relevant) return `⚠️ ${relevant.title.split(':')[0]}`;
+      return "Good Service";
+    } catch (e) { return "Good Service"; }
+  }
+
   async getRealWeather() {
     if (!this.keys.weather) return null;
-    try {
-      // Melbourne
-      const url = `https://api.openweathermap.org/data/2.5/weather?lat=-37.84&lon=144.99&appid=${this.keys.weather}&units=metric`;
-      const response = await axios.get(url);
-      return {
-        temp: Math.round(response.data.main.temp),
-        condition: response.data.weather[0].main,
-        icon: this.getIcon(response.data.weather[0].id)
-      };
-    } catch (e) { console.error("Weather Error", e.message); return null; }
+    const url = `https://api.openweathermap.org/data/2.5/weather?lat=-37.84&lon=144.99&appid=${this.keys.weather}&units=metric`;
+    const response = await axios.get(url);
+    return {
+      temp: Math.round(response.data.main.temp),
+      condition: response.data.weather[0].main,
+      icon: (response.data.weather[0].id >= 800) ? (response.data.weather[0].id === 800 ? '☀️' : '☁️') : '🌧️'
+    };
   }
 
-  getIcon(id) {
-      if (id >= 200 && id < 600) return '🌧️';
-      if (id >= 800) return id === 800 ? '☀️' : '☁️';
-      return '🌡️';
-  }
-
-  getPtvUrl(endpoint, params) {
+  getPtvUrl(requestPath) {
     const ptvBaseUrl = 'https://timetableapi.ptv.vic.gov.au'; 
-    const urlObj = new URL(`${ptvBaseUrl}${endpoint}`);
+    const urlObj = new URL(`${ptvBaseUrl}${requestPath}`);
     urlObj.searchParams.append('devid', this.keys.ptvDevId);
-    Object.keys(params).forEach(k => {
-       if(Array.isArray(params[k])) params[k].forEach(v => urlObj.searchParams.append(k, v));
-       else urlObj.searchParams.append(k, params[k]);
-    });
     const signature = crypto.createHmac('sha1', this.keys.ptvKey)
       .update(urlObj.pathname + urlObj.search).digest('hex').toUpperCase();
     urlObj.searchParams.append('signature', signature);

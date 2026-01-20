@@ -1,142 +1,157 @@
 
-// routes/screen.js (CommonJS)
-const crypto = require('crypto');
-const sharp = require('sharp');
-const fs = require('fs');
-const path = require('path');
+import express from 'express';
+import crypto from 'node:crypto';
+import sharp from 'sharp';
+import { fetch } from 'undici';
 
-/**
- * Normalize any input buffer to TRMNL OG spec:
- * - 800x480 resolution (fit: fill)
- * - grayscale
- * - no alpha
- * - PNG output
- */
-async function normalizeToTrmnlOG(buf) {
-  return await sharp(buf)
-    .resize(800, 480, { fit: 'fill' })
-    .removeAlpha()
-    .grayscale()
-    .png({ compressionLevel: 9 })
-    .toBuffer();
+const router = express.Router();
+
+// ---- Utils --------------------------------------------------------------
+
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
 }
 
-function etagOf(buf) {
+function sanitizeHex(hex, fallback) {
+  const v = String(hex || '').replace(/[^0-9a-f]/gi, '');
+  return v.length === 3 || v.length === 6 ? `#${v}` : fallback;
+}
+
+function etag(buf) {
   return '"' + crypto.createHash('md5').update(buf).digest('hex') + '"';
 }
 
-/**
- * Local fallback image (preferred) or a known-good remote PNG.
- * You can generate a local fallback with:
- *   magick -size 800x480 canvas:white -colorspace Gray -alpha off public/fallback-800x480-gray.png
- */
-async function loadLocalFallback() {
-  const p = path.join(process.cwd(), 'public', 'fallback-800x480-gray.png');
-  if (fs.existsSync(p)) {
-    const raw = fs.readFileSync(p);
-    return await normalizeToTrmnlOG(raw);
-  }
-  // Remote fallback: a small, public, e-ink-friendly PNG
-  const r = await fetch('https://usetrmnl.com/images/kindle.png');
-  if (!r.ok) throw new Error(`Remote fallback fetch failed: ${r.status}`);
-  const raw = Buffer.from(await r.arrayBuffer());
-  return await normalizeToTrmnlOG(raw);
+// Tiny gray PNG fallback (1×1) so we never 500 just for content
+const TINY_FALLBACK = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/VDmJ9kAAAAASUVORK5CYII=',
+  'base64'
+);
+
+// Render an SVG with centered text, then rasterize with sharp
+function textSvg({ w, h, text, color }) {
+  const fontSize = Math.floor(Math.min(w, h) * 0.18);
+  const safeText = (text || '').slice(0, 120).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">
+      <rect width="100%" height="100%" fill="none"/>
+      <style>
+        @supports (font-variation-settings: normal) {
+          text { font-family: "Inter var", system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+        }
+      </style>
+      <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle"
+            font-size="${fontSize}" fill="${color}" font-weight="700">
+        ${safeText || ''}
+      </text>
+    </svg>`;
 }
 
+// Normalize/transform to a consistent PNG
+async function toPng({ input, w, h, grayscale, quality = 9, background = '#111827', text, color }) {
+  const width = clamp(Number(w) || 480, 64, 2048);
+  const height = clamp(Number(h) || 480, 64, 2048);
+  const bg = sanitizeHex(background, '#111827');
+  const fg = sanitizeHex(color, '#ffffff');
+
+  let img;
+
+  if (input) {
+    // Start from remote image buffer
+    img = sharp(input, { failOn: false }).resize(width, height, { fit: 'cover', position: 'entropy' });
+  } else {
+    // Start from a solid background
+    img = sharp({
+      create: {
+        width,
+        height,
+        channels: 4,
+        background: bg
+      }
+    });
+  }
+
+  if (grayscale === '1' || grayscale === 'true') {
+    img = img.grayscale();
+  }
+
+  // Overlay text if any
+  if (text) {
+    const svg = Buffer.from(textSvg({ w: width, h: height, text, color: fg }));
+    img = img.composite([{ input: svg, top: 0, left: 0 }]);
+  }
+
+  // PNG output
+  const out = await img.png({ compressionLevel: clamp(Number(quality) || 9, 0, 9) }).toBuffer();
+  return out;
+}
+
+// Fetch a remote image safely with timeout
+async function fetchRemote(url, timeoutMs = 7000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`Remote fetch failed: ${res.status}`);
+    const ab = await res.arrayBuffer();
+    return Buffer.from(ab);
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// ---- Route --------------------------------------------------------------
+
 /**
- * Mounts the image + diagnostics endpoints on an existing Express app instance.
- *
- * Endpoints:
- *   GET /api/screen       -> image/png (always returns an image, never HTML)
- *   GET /api/diagnostics  -> JSON timings and byte sizes (helps confirm server-side correctness)
- *
- * Environment (optional):
- *   SCREEN_SRC_URL        -> upstream image URL to proxy+normalize (e.g. a PNG you already host)
- *                            If unset, a local/remote fallback image is served so devices still render.
+ * GET /api/screen
+ * Examples:
+ *   /api/screen
+ *   /api/screen?text=Hello
+ *   /api/screen?url=https://picsum.photos/800/600.jpg&w=512&h=512
+ *   /api/screen?text=Hi&bg=0ea5e9&color=001219
  */
-module.exports = function mountScreenRoutes(app) {
-  const SCREEN_SRC_URL = process.env.SCREEN_SRC_URL;
+router.get('/screen', async (req, res) => {
+  try {
+    const { url, w, h, grayscale, quality, bg, text, color } = req.query;
 
-  app.get('/api/screen', async (req, res) => {
-    const lm = new Date();
-    try {
-      let srcBuf;
-
-      if (SCREEN_SRC_URL) {
-        // Node 18+ has global fetch; Render runs on a modern Node by default.
-        const r = await fetch(SCREEN_SRC_URL, { redirect: 'follow' });
-        if (!r.ok) throw new Error(`Upstream ${r.status} ${SCREEN_SRC_URL}`);
-        srcBuf = Buffer.from(await r.arrayBuffer());
-      } else {
-        srcBuf = await loadLocalFallback();
-      }
-
-      const png = await normalizeToTrmnlOG(srcBuf);
-
-      // Headers to help TRMNL re-process on change (and to prevent stale caching)
-      res.set('Content-Type', 'image/png');
-      res.set('Cache-Control', 'no-cache');
-      res.set('ETag', etagOf(png));
-      res.set('Last-Modified', lm.toUTCString());
-
-      res.status(200).send(png);
-    } catch (err) {
-      console.error('[api/screen] error:', err);
-
-      // Always send a valid image so e-ink devices still render something
+    let baseBuf = null;
+    if (url) {
       try {
-        const png = await loadLocalFallback();
-        res.set('Content-Type', 'image/png');
-        res.set('Cache-Control', 'no-cache');
-        res.set('ETag', etagOf(png));
-        res.set('Last-Modified', new Date().toUTCString());
-        res.status(200).send(png);
-      } catch (fallbackErr) {
-        console.error('[api/screen] fallback error:', fallbackErr);
-        res.status(503).set('Content-Type', 'text/plain').send('Service temporarily unavailable');
+        baseBuf = await fetchRemote(url);
+      } catch (e) {
+        // Fall back to tiny pixel if remote fails; still return a valid PNG
+        baseBuf = TINY_FALLBACK;
       }
     }
-  });
 
-  app.get('/api/diagnostics', async (req, res) => {
-    const started = Date.now();
-    const out = { now: new Date().toISOString(), ok: false, steps: [] };
+    const png = await toPng({
+      input: baseBuf,
+      w,
+      h,
+      grayscale,
+      quality,
+      background: bg,
+      text,
+      color
+    });
 
-    try {
-      // Fetch (either upstream or fallback)
-      const f0 = Date.now();
-      let src;
-      if (process.env.SCREEN_SRC_URL) {
-        const r = await fetch(process.env.SCREEN_SRC_URL);
-        if (!r.ok) throw new Error(`Upstream ${r.status} ${process.env.SCREEN_SRC_URL}`);
-        src = Buffer.from(await r.arrayBuffer());
-      } else {
-        src = await loadLocalFallback();
-      }
-      out.steps.push({
-        name: 'fetch',
-        ms: Date.now() - f0,
-        bytes: src?.length || 0,
-        ok: !!src && src.length > 1000
-      });
+    res.set({
+      'Content-Type': 'image/png',
+      'Cache-Control': 'public, max-age=3600',
+      ETag: etag(png)
+    });
 
-      // Normalize
-      const n0 = Date.now();
-      const png = await normalizeToTrmnlOG(src);
-      out.steps.push({
-        name: 'normalize',
-        ms: Date.now() - n0,
-        bytes: png.length,
-        ok: png.length > 1000
-      });
-
-      out.total_ms = Date.now() - started;
-      out.ok = out.steps.every(s => s.ok);
-      res.json(out);
-    } catch (e) {
-      out.error = String(e);
-      out.total_ms = Date.now() - started;
-      res.status(200).json(out);
+    // If If-None-Match matches, honor it
+    if (req.headers['if-none-match'] === etag(png)) {
+      return res.status(304).end();
     }
-  });
-};
+
+    return res.status(200).send(png);
+  } catch (err) {
+    // As a last resort, always return *some* PNG
+    res.set('Content-Type', 'image/png');
+    return res.status(200).send(TINY_FALLBACK);
+  }
+});
+
+export default router;
+``

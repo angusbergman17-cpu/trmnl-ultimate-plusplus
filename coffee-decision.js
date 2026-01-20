@@ -1,113 +1,89 @@
-/**
- * COFFEE DECISION ENGINE (The "Norman -> Tram -> Train" Chain)
- * * LOGIC FLOW:
- * 1. Walk to Norman (4 mins)
- * 2. Queue & Make Coffee (Variable based on time)
- * 3. Walk to Tram Stop (1 min)
- * 4. WAIT for the specific Tram (Real-time data)
- * 5. Ride Tram to Station (3 mins)
- * 6. Walk to Platform (2 mins)
- * 7. CATCH THE TRAIN
- */
-
 class CoffeeDecision {
   constructor() {
-    this.shop = {
-      name: "Norman",
-      walkTo: 4,      // Station -> Norman
-      walkToTram: 1,  // Norman -> Tram Stop
-      rideTime: 3,    // Tram Ride to Station
-      platformWalk: 2,// Tram Stop -> Train Platform
-      hours: {
-        mon_sat: { open: 7, close: 16 }, 
-        sun:     { open: 8, close: 16 }  
-      }
+    this.commute = {
+      walkToWork: 6,   // Parliament -> 80 Collins
+      homeToNorman: 4, 
+      makeCoffee: 6,   
+      normanToTram: 1, 
+      tramRide: 5,     
+      platformChange: 3,
+      trainRide: 9     
     };
   }
 
-  // Safe Melbourne Time
   getMelbourneTime() {
     const now = new Date();
     return new Date(now.getTime() + (11 * 60 * 60 * 1000));
   }
 
-  isOpen(now) {
-    const day = now.getUTCDay(); 
-    const hour = now.getUTCHours();
-    const minute = now.getUTCMinutes();
-    const timeFloat = hour + (minute / 60);
-
-    const rules = (day === 0) ? this.shop.hours.sun : this.shop.hours.mon_sat;
-    return timeFloat >= rules.open && timeFloat < (rules.close - 0.25);
+  isDisrupted(newsText) {
+    if (!newsText) return false;
+    const badWords = ['Major Delays', 'Suspended', 'Buses replace', 'Cancellation'];
+    return badWords.some(word => newsText.includes(word));
   }
 
-  getBusyness(now) {
-    const day = now.getUTCDay();
-    const hour = now.getUTCHours();
-
-    // Weekend Brunch Rush (9am - 12pm)
-    if ((day === 0 || day === 6) && hour >= 9 && hour < 12) return { status: 'Slammed', makeTime: 12 };
-    // Weekday Morning Rush (8am - 9am)
-    if (day >= 1 && day <= 5 && hour === 8) return { status: 'Busy', makeTime: 8 };
-    // Standard
-    return { status: 'Quiet', makeTime: 5 };
-  }
-
-  /**
-   * THE CALCULATION
-   * @param {number} trainMinutes - Minutes until train departs
-   * @param {Array} tramData - Live array of upcoming trams [{minutes: 4}, {minutes: 12}...]
-   */
-  calculate(trainMinutes, tramData = []) {
+  calculate(nextTrainMin, tramData, newsText) {
     const now = this.getMelbourneTime();
+    const day = now.getUTCDay(); // 0=Sun, 6=Sat
+    const currentHour = now.getUTCHours();
+    const currentMin = now.getUTCMinutes();
+    const currentTimeInMins = currentHour * 60 + currentMin;
 
-    // 1. IS NORMAN OPEN?
-    if (!this.isOpen(now)) {
-        return { decision: "NORMAN CLOSED", subtext: "Opens tomorrow", canGet: false };
+    // 1. INTERRUPTION
+    if (this.isDisrupted(newsText)) {
+        return { decision: "SKIP COFFEE", subtext: "Network Alert! Go direct.", canGet: false, urgent: true };
     }
 
-    // 2. COFFEE LOGISTICS
-    const busyness = this.getBusyness(now);
-    const timeToGetCoffee = this.shop.walkTo + busyness.makeTime + this.shop.walkToTram; 
-    // Example: 4 (walk) + 5 (make) + 1 (stop) = 10 mins until ready at tram stop
-
-    // 3. FIND THE MAGIC TRAM
-    // We need a tram that arrives *after* we finish getting coffee
-    const usableTram = tramData.find(t => t.minutes >= timeToGetCoffee);
-
-    if (!usableTram) {
-        // No tram fits the schedule? Fallback to walking back (4 mins)
-        const walkBackTotal = timeToGetCoffee + 4; // 14 mins total
-        if (trainMinutes > walkBackTotal + 1) {
-             return { decision: "WALK IT", subtext: "No tram matches, walk back", canGet: true };
-        }
-        return { decision: "NO CONNECTION", subtext: "Coffee ready @ " + timeToGetCoffee + "m (Misses Trams)", canGet: false };
+    // 2. WEEKEND MODE
+    if (day === 0 || day === 6) {
+        if (nextTrainMin > 15) return { decision: "WEEKEND VIBES", subtext: `Next train in ${nextTrainMin}m`, canGet: true, urgent: false };
+        return { decision: "CATCH TRAIN", subtext: `Train departing in ${nextTrainMin}m`, canGet: true, urgent: false };
     }
 
-    // 4. CALCULATE TOTAL JOURNEY via TRAM
-    // [Wait for Tram] + [Ride] + [Platform Walk]
-    const arrivalAtPlatform = usableTram.minutes + this.shop.rideTime + this.shop.platformWalk;
+    // 3. AFTER 9 AM (Standard)
+    if (currentHour >= 9) {
+        if (nextTrainMin > 15) return { decision: "GET COFFEE", subtext: `Next train in ${nextTrainMin}m`, canGet: true, urgent: false };
+        return { decision: "RUSH IT", subtext: "Train is approaching", canGet: false, urgent: true };
+    }
 
-    // 5. THE VERDICT
-    const slack = trainMinutes - arrivalAtPlatform;
+    // 4. BEFORE 9 AM (80 Collins Commute)
+    const target9am = 9 * 60; // 540 mins
+    
+    const tripDirect = 4 + 5 + 3 + 9 + this.commute.walkToWork; // ~27 mins
+    const tripWithCoffee = tripDirect + this.commute.makeCoffee + 1; // ~34 mins
 
-    if (slack >= 2) {
+    const minsUntil9am = target9am - currentTimeInMins;
+
+    if (minsUntil9am < tripDirect) {
         return { 
-            decision: "PERFECT SYNC", 
-            subtext: `Get Tram in ${usableTram.minutes}m -> Train in ${trainMinutes}m`, 
-            canGet: true 
+            decision: "LATE FOR WORK", 
+            subtext: `Only ${minsUntil9am}m to 9am! (Need ${tripDirect}m)`, 
+            canGet: false, urgent: true 
         };
-    } else if (slack >= 0) {
+    }
+
+    if (minsUntil9am < tripWithCoffee) {
         return { 
-            decision: "RUSH THE TRAM", 
-            subtext: `Tram arrives ${usableTram.minutes}m. Tight connection!`, 
-            canGet: true 
+            decision: "SKIP COFFEE", 
+            subtext: `Need ${tripWithCoffee}m. Have ${minsUntil9am}m.`, 
+            canGet: false, urgent: true
+        };
+    }
+
+    const coffeeReadyTime = this.commute.homeToNorman + this.commute.makeCoffee;
+    const bestTram = tramData ? tramData.find(t => t.minutes >= coffeeReadyTime) : null;
+
+    if (bestTram) {
+         return { 
+            decision: "GET COFFEE", 
+            subtext: `Tram in ${bestTram.minutes}m -> 80 Collins by 9am`, 
+            canGet: true, urgent: false
         };
     } else {
         return { 
-            decision: "SKIP COFFEE", 
-            subtext: `Coffee+Tram takes ${arrivalAtPlatform}m. Train leaves in ${trainMinutes}m`, 
-            canGet: false 
+            decision: "GET COFFEE", 
+            subtext: `${minsUntil9am}m buffer before 9am meeting`, 
+            canGet: true, urgent: false
         };
     }
   }

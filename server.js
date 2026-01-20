@@ -2,6 +2,7 @@ const express = require('express');
 const DataScraper = require('./data-scraper-ultimate-plus');
 const CoffeeDecision = require('./coffee-decision');
 const PidsRenderer = require('./pids-renderer');
+const sharp = require('sharp'); 
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -10,59 +11,62 @@ const scraper = new DataScraper();
 const coffeeLogic = new CoffeeDecision();
 const renderer = new PidsRenderer();
 
-// GLOBAL CACHE: Stores the latest image in RAM
 let currentImageBuffer = null;
 let lastUpdateTime = null;
 
-// --- 1. INTERNAL ENGINE (Runs every 60s) ---
-// Keeps data fresh in the background so there is NO waiting when TRMNL asks.
+app.use(express.json());
+
+app.use((req, res, next) => {
+  if (req.url !== '/') console.log(`[${new Date().toLocaleTimeString()}] 📨 ${req.method} ${req.url}`);
+  next();
+});
+
 async function refreshCycle() {
-  console.log("♻️  Refueling Cache...");
-  
+  console.log("♻️  Refreshing Data...");
   try {
-    // Fetch Data (Timeout 10s)
-    const data = await scraper.fetchAllData().catch(e => ({
-        trains: [], trams: [], weather: {temp: '--', condition: 'Offline', icon: '?'}, news: 'Offline'
-    }));
+    const timeout = new Promise((resolve, reject) => setTimeout(() => reject(new Error("Timeout")), 15000));
+    
+    const data = await Promise.race([scraper.fetchAllData(), timeout]).catch(e => {
+        console.error("Scraper Error:", e.message);
+        return { trains: [], trams: [], weather: {temp: '--', condition: 'Data Offline', icon: '?'}, news: 'Connection Error' };
+    });
 
-    // Logic
     const nextTrainMin = (data.trains && data.trains[0]) ? data.trains[0].minutes : 99;
-    const coffee = coffeeLogic.calculate(nextTrainMin, data.trams);
+    const coffee = coffeeLogic.calculate(nextTrainMin, data.trams, data.news);
 
-    // Render & Save to RAM
     currentImageBuffer = await renderer.render(data, coffee, true);
     lastUpdateTime = new Date();
-    console.log("📸 Image Ready (" + lastUpdateTime.toLocaleTimeString('en-AU', {timeZone:'Australia/Melbourne'}) + ")");
+    console.log("📸 Image Updated Successfully");
 
   } catch (error) {
-    console.error("❌ Cycle Failed:", error.message);
+    console.error("CRITICAL CYCLE FAILURE:", error.message);
   }
 }
 
-// --- 2. THE ENDPOINT (TRMNL visits this) ---
-app.get('/api/live-image.png', (req, res) => {
+app.get('/api/live-image.png', async (req, res) => {
+  res.set('Content-Type', 'image/png');
+  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+
   if (currentImageBuffer) {
-      res.set('Content-Type', 'image/png');
-      res.set('Cache-Control', 'no-cache, no-store, must-revalidate'); // Force fresh load
       res.send(currentImageBuffer);
-      console.log("⚡ Served Image to TRMNL");
   } else {
-      res.status(503).send("Booting up...");
+      console.log("⚠️ Cache empty. Serving Loading Placeholder.");
+      try {
+        const loadingSvg = `<svg width="800" height="480" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="white"/><text x="400" y="240" font-size="50" font-family="sans-serif" font-weight="bold" text-anchor="middle" fill="black">SYSTEM STARTING</text></svg>`;
+        const buffer = await sharp(Buffer.from(loadingSvg)).png().toBuffer();
+        res.send(buffer);
+        if (!lastUpdateTime) refreshCycle();
+      } catch (e) { res.status(500).send("Server Error"); }
   }
 });
 
-// For Manual Refresh button in Dashboard
 app.all('/api/screen', (req, res) => {
-   // Points TRMNL to the image route
    const imageUrl = `https://trmnl-ultimate-plusplus.onrender.com/api/live-image.png?t=${Date.now()}`;
-   res.json({ 
-       markup: `<div class="view" style="padding:0; margin:0; background:white;"><img src="${imageUrl}" style="width:100%;" /></div>` 
-   });
+   res.json({ markup: `<div class="view" style="padding:0; margin:0; background:white;"><img src="${imageUrl}" style="width:100%;" /></div>` });
 });
 
-// Start Engine
-setInterval(refreshCycle, 60000); // Update cache every 60s
-setTimeout(refreshCycle, 2000);   // First run on boot
+setInterval(refreshCycle, 60000); 
+setTimeout(refreshCycle, 1000);   
 
 app.get('/', (req, res) => res.send("TRMNL Server Online"));
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

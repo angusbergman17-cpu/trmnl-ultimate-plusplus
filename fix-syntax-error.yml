@@ -1,0 +1,54 @@
+name: Fix Server Now
+on:
+  workflow_dispatch:
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Replace server.js
+        run: |
+          cat > server.js << 'EOF'
+const express = require('express');
+const config = require('./config');
+const DataScraper = require('./data-scraper-ultimate-plus');
+const CoffeeDecision = require('./coffee-decision');
+const PidsRenderer = require('./pids-renderer');
+const app = express();
+const PORT = process.env.PORT || 3000;
+const scraper = new DataScraper();
+const coffeeDecision = new CoffeeDecision();
+const renderer = new PidsRenderer();
+app.get('/api/status', (req, res) => {
+  res.json({status: 'online', server: 'TRMNL PT ULTIMATE++'});
+});
+app.get('/api/data', async (req, res) => {
+  try {
+    const data = await scraper.fetchAllData();
+    const coffee = coffeeDecision.calculate();
+    res.json({timestamp: new Date().toISOString(), coffee, trains: data.trains, trams: data.trams});
+  } catch (error) {
+    res.status(500).json({error: 'Failed to fetch data'});
+  }
+});
+app.get('/api/screen', async (req, res) => {
+  try {
+    const data = await scraper.fetchAllData();
+    const coffee = coffeeDecision.calculate();
+    const imageBuffer = await renderer.render({coffee, trains: data.trains, trams: data.trams, weather: data.weather, news: data.news, disruptions: data.disruptions});
+    res.setHeader('Content-Type', 'image/png');
+    res.send(imageBuffer);
+  } catch (error) {
+    res.status(500).json({error: 'Failed to render screen'});
+  }
+});
+app.listen(PORT, () => {console.log('Server running on port', PORT);});
+module.exports = app;
+EOF
+      - name: Commit
+        run: |
+          git config user.name "Action"
+          git config user.email "action@github.com"
+          git add server.js
+          git commit -m "Fix server syntax error"
+          git push

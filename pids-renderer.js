@@ -7,24 +7,22 @@ class PidsRenderer {
   }
 
   async render(data, coffee, invert = false) {
-    // 1. SAFE MELBOURNE TIME (Fixes the 02:38pm issue)
-    // We use Intl to force the correct 24h/12h format for Melbourne
     const now = new Date();
     const timeFormatter = new Intl.DateTimeFormat('en-AU', {
         timeZone: 'Australia/Melbourne',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false // Forces 14:00 instead of 2:00 pm (less ambiguity)
+        hour: '2-digit', minute: '2-digit', hour12: false
     });
     const timeStr = timeFormatter.format(now);
 
-    // 2. SVG TEMPLATE
-    // We build the image using SVG XML
+    // LOGIC: Handle "Urgent" Coffee State (Inverted Colors)
+    const boxFill = coffee.urgent ? "white" : "black";
+    const textFill = coffee.urgent ? "black" : "white";
+    const boxStroke = coffee.urgent ? 'stroke="black" stroke-width="4"' : '';
+
     const svg = `
     <svg width="${this.width}" height="${this.height}" xmlns="http://www.w3.org/2000/svg">
       <style>
         .base { font-family: sans-serif; fill: black; }
-        .bold { font-weight: bold; }
         .white { fill: white; }
         .line { stroke: black; stroke-width: 3; }
       </style>
@@ -33,61 +31,68 @@ class PidsRenderer {
 
       <text x="20" y="70" font-size="60" font-weight="900" class="base">${timeStr}</text>
       
-      <rect x="420" y="20" width="360" height="60" fill="black" rx="10" />
-      <text x="600" y="62" font-size="28" font-weight="bold" fill="white" text-anchor="middle">
+      <rect x="400" y="20" width="380" height="60" fill="${boxFill}" rx="8" ${boxStroke} />
+      <text x="590" y="62" font-size="28" font-weight="bold" fill="${textFill}" text-anchor="middle">
         ${coffee.decision.toUpperCase()}
       </text>
 
-      <rect x="20" y="110" width="180" height="35" fill="black" />
-      <text x="30" y="138" font-size="24" font-weight="bold" fill="white">TRAM 58</text>
-      <line x1="20" y1="150" x2="780" y2="150" class="line" />
+      <rect x="20" y="110" width="800" height="35" fill="black" />
+      <text x="30" y="138" font-size="24" font-weight="bold" fill="white">TRAM 58 (TO WEST COBURG)</text>
 
       <g transform="translate(20, 190)">
-         ${this.renderList(data.trams, "No Trams - Next at 05:00")}
+         ${this.renderList(data.trams, "NO TRAMS - CHECK SCHEDULE")}
       </g>
 
-      <rect x="20" y="280" width="280" height="35" fill="black" />
-      <text x="30" y="308" font-size="24" font-weight="bold" fill="white">TRAINS (LOOP)</text>
-      <line x1="20" y1="320" x2="780" y2="320" class="line" />
+      <rect x="20" y="280" width="800" height="35" fill="black" />
+      <text x="30" y="308" font-size="24" font-weight="bold" fill="white">TRAINS (CITY LOOP)</text>
 
       <g transform="translate(20, 360)">
-         ${this.renderList(data.trains, "No Trains - Next at 04:30")}
+         ${this.renderList(data.trains, "NO TRAINS - CHECK SCHEDULE")}
       </g>
 
       <line x1="20" y1="420" x2="780" y2="420" class="line" />
       
       <text x="20" y="460" font-size="32" font-weight="bold" class="base">
-        ${data.weather.temp !== '--' ? data.weather.temp + '°C' : ''} ${data.weather.icon}
+        ${data.weather.temp !== '--' ? data.weather.temp + '°' : ''} ${data.weather.icon}
       </text>
-      <text x="140" y="460" font-size="24" class="base">
+      <text x="140" y="460" font-size="24" class="base" fill="#444">
         ${data.weather.condition || ''}
       </text>
 
       <text x="780" y="460" font-size="20" text-anchor="end" class="base">
         ${coffee.subtext}
       </text>
-
     </svg>
     `;
 
-    // 3. CONVERT TO PNG
-    return await sharp(Buffer.from(svg))
-      .png()
-      .toBuffer();
+    return await sharp(Buffer.from(svg)).png().toBuffer();
   }
 
-  // Helper to draw lists or the "Empty Message"
   renderList(items, emptyMsg) {
     if (!items || items.length === 0) {
-        return `<text x="0" y="0" font-size="28" fill="#555" font-style="italic">${emptyMsg}</text>`;
+        return `<text x="10" y="0" font-size="28" fill="#555" font-style="italic">${emptyMsg}</text>`;
     }
     
-    // Draw up to 2 items
     return items.slice(0, 2).map((item, i) => {
         const y = i * 50;
+        
+        // FEATURE: Real-time vs Scheduled Indicator
+        // If it's from the static timetable (offline), add a *
+        const schedIndicator = item.isScheduled ? "*" : ""; 
+        
+        let timeDisplay;
+        if (item.minutes > 59) {
+            const dateObj = new Date(item.exactTime);
+            timeDisplay = "at " + dateObj.toLocaleTimeString('en-AU', {
+                timeZone: 'Australia/Melbourne', hour: '2-digit', minute: '2-digit', hour12: false
+            });
+        } else {
+            timeDisplay = `${item.minutes} min`;
+        }
+
         return `
-            <text x="0" y="${y}" font-size="32" font-weight="bold" class="base">${item.minutes} min</text>
-            <text x="120" y="${y}" font-size="28" class="base">${item.destination}</text>
+            <text x="0" y="${y}" font-size="36" font-weight="bold" class="base">${timeDisplay}${schedIndicator}</text>
+            <text x="180" y="${y}" font-size="30" class="base">${item.destination}</text>
         `;
     }).join('');
   }

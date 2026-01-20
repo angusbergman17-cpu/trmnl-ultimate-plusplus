@@ -12,13 +12,17 @@ const RssParser = require('rss-parser');
 
 class DataScraper {
   constructor() {
-    this.parser = new RssParser();
+    // FIX: Add a 'User-Agent' so PTV thinks we are a browser, not a bot
+    this.parser = new RssParser({
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+    });
     
-    // Public Feeds (No Keys Required)
-    // These are the official feeds that power the PTV website/app alerts
+    // Public Feeds
     this.publicFeeds = {
-      metro: 'https://www.ptv.vic.gov.au/feeds/rss/lines/2', // Metro Trains
-      trams: 'https://www.ptv.vic.gov.au/feeds/rss/lines/1'  // Yarra Trams
+      metro: 'https://www.ptv.vic.gov.au/feeds/rss/lines/2',
+      trams: 'https://www.ptv.vic.gov.au/feeds/rss/lines/1'
     };
 
     this.cache = {
@@ -29,17 +33,15 @@ class DataScraper {
       lastUpdate: null
     };
     
-    // Auth Credentials (Optional - for "Gold Standard" data)
+    // Auth Credentials
     this.ptvCreds = {
       devId: process.env.PTV_DEV_ID || null,
       key: process.env.PTV_KEY || null
     };
 
-    // Public API Endpoints (We mimic the apps)
     this.tramTrackerUrl = 'https://www.tramtracker.com.au/Controllers/GetNextPredictionsForStop.ashx';
     this.ptvBaseUrl = 'https://timetableapi.ptv.vic.gov.au'; 
     
-    // Your Stops
     this.stops = {
       southYarra: 1120,
       tivoliRoad: 2189,

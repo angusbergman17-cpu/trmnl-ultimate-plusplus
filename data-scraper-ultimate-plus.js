@@ -1,9 +1,9 @@
 /**
- * ULTIMATE++ Data Scraper (Public Feed Edition)
- * Strategy:
- * 1. MIMIC: Use TramTracker's public endpoint for live tram times.
- * 2. SCRAPE: Read public RSS feeds for "Twitter-style" service alerts.
- * 3. FALLBACK: Use PTV API only if available, otherwise simulate.
+ * ULTIMATE++ Data Scraper (Ghost Edition)
+ * * FEATURES:
+ * 1. PARLIAMENT FILTER: Keeps only City Loop trains (South Yarra -> Parliament).
+ * 2. GHOST MODE: Rotates User-Agents and sends "Human" headers to bypass blocks.
+ * 3. HYBRID ALERTS: Scrapes PTV RSS + HTML Fallback with Referrer spoofing.
  */
 
 const axios = require('axios');
@@ -12,17 +12,28 @@ const RssParser = require('rss-parser');
 
 class DataScraper {
   constructor() {
-    // FIX: Add a 'User-Agent' so PTV thinks we are a browser, not a bot
+    // 1. POOL OF MODERN BROWSERS (We pick one at random)
+    this.userAgents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0'
+    ];
+
+    // Pick a random identity for this session
+    this.currentIdentity = this.userAgents[Math.floor(Math.random() * this.userAgents.length)];
+
+    // Initialize RSS Parser with this identity
     this.parser = new RssParser({
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        headers: { 
+            'User-Agent': this.currentIdentity,
+            'Accept': 'application/rss+xml, application/xml, text/xml;q=0.9',
         }
     });
     
-    // Public Feeds
     this.publicFeeds = {
       metro: 'https://www.ptv.vic.gov.au/feeds/rss/lines/2',
-      trams: 'https://www.ptv.vic.gov.au/feeds/rss/lines/1'
+      metroBackup: 'https://www.metrotrains.com.au/'
     };
 
     this.cache = {
@@ -33,7 +44,6 @@ class DataScraper {
       lastUpdate: null
     };
     
-    // Auth Credentials
     this.ptvCreds = {
       devId: process.env.PTV_DEV_ID || null,
       key: process.env.PTV_KEY || null
@@ -48,68 +58,125 @@ class DataScraper {
     };
   }
 
-  // --- MAIN FETCH FUNCTION ---
+  // --- HELPER: GENERATE "HUMAN" HEADERS ---
+  getGhostHeaders(referer = 'https://www.google.com/') {
+      return {
+          'User-Agent': this.currentIdentity,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+          'Accept-Language': 'en-AU,en-GB;q=0.9,en-US;q=0.8,en;q=0.7',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Referer': referer, // Spoofs where we came from
+          'Connection': 'keep-alive',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-Site': 'cross-site',
+          'Upgrade-Insecure-Requests': '1',
+          'Cache-Control': 'max-age=0'
+      };
+  }
+
   async fetchAllData() {
     const now = Date.now();
-    // Cache for 30 seconds to prevent rate-limiting
     if (this.cache.lastUpdate && (now - this.cache.lastUpdate) < 30000) {
       return this.cache;
     }
 
-    // Run scrapers in parallel
     const [trains, trams, weather, news] = await Promise.all([
-      this.getTrains(), // API or Fallback
-      this.getTrams(),  // Mimics TramTracker
+      this.getTrains(),
+      this.getTrams(),
       this.getWeather(),
-      this.scrapePublicAlerts() // Scrapes RSS
+      this.getServiceAlerts()
     ]);
 
     this.cache = { trains, trams, weather, news, lastUpdate: now };
     return this.cache;
   }
 
-  // --- 1. SCRAPE PUBLIC ALERTS (Twitter Alternative) ---
-  async scrapePublicAlerts() {
-    try {
-      // Fetch Metro Trains RSS Feed
-      const feed = await this.parser.parseURL(this.publicFeeds.metro);
-      
-      // Look for alerts relevant to our lines
-      // We search for keywords like "Cranbourne", "Pakenham", "Frankston"
-      const relevantItem = feed.items.find(item => 
-        item.title && 
-        ['Cranbourne', 'Pakenham', 'Frankston', 'Sandringham'].some(line => item.title.includes(line))
-      );
-
-      if (relevantItem) {
-        // Clean up the text (remove "Updated: ..." etc)
-        return `⚠️ ${relevantItem.title.split(':')[0]}`;
-      }
-
-      return "Metro Trains operating normally • Good Service";
-    } catch (e) {
-      console.log("RSS Scrape failed, defaulting to OK");
-      return "Metro Trains operating normally • Good Service";
+  // --- 1. TRAINS (Parliament Filter) ---
+  async getTrains() {
+    if (this.ptvCreds.devId && this.ptvCreds.key) {
+      return this.fetchPtvTrains();
     }
+    
+    // FALLBACK SIMULATION (Parliament Specific)
+    // We only simulate trains going to City Loop (Parliament)
+    return [
+      { destination: 'City Loop', platform: '3', minutes: this.getStaticMinutes(4), stopsAll: true },
+      { destination: 'City Loop', platform: '3', minutes: this.getStaticMinutes(14), stopsAll: true },
+      { destination: 'City Loop', platform: '3', minutes: this.getStaticMinutes(22), stopsAll: false }
+    ];
   }
 
-  // --- 2. MIMIC TRAMTRACKER (Live Trams) ---
+  getStaticMinutes(offset) {
+    const now = new Date();
+    const currentMin = now.getMinutes();
+    let mins = (offset - (currentMin % 10)); 
+    if (mins < 0) mins += 10;
+    return mins;
+  }
+
+  async fetchPtvTrains() {
+    try {
+      const url = this.getPtvUrl(`/v3/departures/route_type/0/stop/${this.stops.southYarra}`, {
+        platform_numbers: [3],
+        max_results: 8, // Get extras to allow filtering
+        expand: ['run', 'route']
+      });
+      
+      const response = await axios.get(url);
+      const departures = [];
+      const now = new Date();
+
+      if (response.data?.departures) {
+          for (const dep of response.data.departures) {
+            const run = response.data.runs[dep.run_ref];
+            const destName = this.cleanDestination(run?.destination_name);
+            
+            // --- PARLIAMENT FILTER ---
+            // Only keep "City Loop" (Parliament) trains. 
+            // Reject "Flinders St" (Direct)
+            if (destName === 'Flinders St') continue;
+
+            const scheduled = new Date(dep.scheduled_departure_utc);
+            const estimated = dep.estimated_departure_utc ? new Date(dep.estimated_departure_utc) : scheduled;
+            const minutes = Math.round((estimated - now) / 60000);
+
+            if (minutes >= 0 && minutes < 90) {
+                departures.push({
+                    destination: 'Parliament', 
+                    platform: dep.platform_number,
+                    minutes: minutes,
+                    stopsAll: !dep.flags.includes('Express'),
+                    realtime: true
+                });
+            }
+          }
+      }
+      return departures.sort((a, b) => a.minutes - b.minutes).slice(0, 3);
+    } catch (e) { return []; }
+  }
+
+  cleanDestination(name) {
+      if (!name) return 'City';
+      if (name.includes('Flinders')) return 'Flinders St';
+      if (name.includes('Southern Cross')) return 'City Loop';
+      return 'City Loop';
+  }
+
+  // --- 2. LIVE TRAMS (With Stealth Headers) ---
   async getTrams() {
      try {
-        // This hits the endpoints the mobile app uses (Public/Open)
         const response = await axios.get(this.tramTrackerUrl, {
-            params: { stopNo: this.stops.tivoliRoad, routeNo: 58, isLowFloor: false }
+            params: { stopNo: this.stops.tivoliRoad, routeNo: 58, isLowFloor: false },
+            // Make TramTracker think we are a real phone/browser
+            headers: this.getGhostHeaders('https://www.tramtracker.com.au/')
         });
-
         const departures = [];
-        const predictions = Array.isArray(response.data.predictions) 
-            ? response.data.predictions 
-            : [response.data.predictions];
+        const predictions = Array.isArray(response.data.predictions) ? response.data.predictions : [response.data.predictions];
 
         for (const pred of predictions) {
             if (pred) {
                 const minutes = Math.round(pred.minutes || 0);
-                // "No Prediction" usually returns huge numbers or null
                 if (minutes >= 0 && minutes < 60) {
                     departures.push({
                         route: '58',
@@ -122,77 +189,36 @@ class DataScraper {
         }
         return departures.sort((a, b) => a.minutes - b.minutes).slice(0, 3);
      } catch (e) {
-         console.error("TramTracker Mimic Failed:", e.message);
          return [{ route: '58', destination: 'West Coburg', minutes: 5, realtime: false }];
      }
   }
 
-  // --- 3. TRAINS (PTV API or Timetable Fallback) ---
-  async getTrains() {
-    // If we have keys, use the official API
-    if (this.ptvCreds.devId && this.ptvCreds.key) {
-      return this.fetchPtvTrains();
-    }
-    
-    // NO KEYS? use this "Timetable" Simulation
-    // (This mimics a weekday schedule if we can't get live data)
-    console.log("No API Keys - Using Static Timetable");
-    return [
-      { destination: 'City Loop', platform: '3', minutes: this.getStaticMinutes(5), stopsAll: true },
-      { destination: 'Flinders St', platform: '3', minutes: this.getStaticMinutes(12), stopsAll: false },
-      { destination: 'City Loop', platform: '3', minutes: this.getStaticMinutes(20), stopsAll: true }
-    ];
-  }
-
-  getStaticMinutes(offset) {
-    // Generates a minute count that reduces as time passes (for simulation)
-    const now = new Date();
-    const currentMin = now.getMinutes();
-    let mins = (offset - (currentMin % 10)); 
-    if (mins < 0) mins += 10;
-    return mins;
-  }
-
-  // --- PTV API HELPER (If keys exist) ---
-  async fetchPtvTrains() {
+  // --- 3. ALERTS (Ghost Mode) ---
+  async getServiceAlerts() {
     try {
-      const url = this.getPtvUrl(`/v3/departures/route_type/0/stop/${this.stops.southYarra}`, {
-        platform_numbers: [3],
-        max_results: 4,
-        expand: ['run', 'route']
-      });
-      
-      const response = await axios.get(url);
-      const departures = [];
-      const now = new Date();
-
-      if (response.data?.departures) {
-          for (const dep of response.data.departures) {
-            const scheduled = new Date(dep.scheduled_departure_utc);
-            // Use estimated if available (Real Time), else scheduled
-            const estimated = dep.estimated_departure_utc ? new Date(dep.estimated_departure_utc) : scheduled;
-            const minutes = Math.round((estimated - now) / 60000);
-
-            if (minutes >= 0 && minutes < 90) {
-                departures.push({
-                    destination: 'City Loop', // Simplified for display
-                    platform: dep.platform_number,
-                    minutes: minutes,
-                    stopsAll: !dep.flags.includes('Express'),
-                    realtime: true
-                });
-            }
-          }
-      }
-      return departures.sort((a, b) => a.minutes - b.minutes).slice(0, 3);
-    } catch (e) {
-      console.log("PTV API Failed");
-      return []; 
+      // Try RSS first (Official)
+      const feed = await this.parser.parseURL(this.publicFeeds.metro);
+      const relevant = feed.items.find(item => 
+        item.title && ['Cranbourne', 'Pakenham', 'Frankston', 'Sandringham'].some(line => item.title.includes(line))
+      );
+      if (relevant) return `⚠️ ${relevant.title.split(':')[0]}`;
+      return "Metro Trains operating normally • Good Service";
+    } catch (rssError) {
+      try {
+        // FALLBACK: Scrape HTML with full stealth headers
+        // We set the Referer to their own site so it looks internal
+        const { data: html } = await axios.get(this.publicFeeds.metroBackup, { 
+            headers: this.getGhostHeaders('https://www.metrotrains.com.au/') 
+        });
+        
+        if (html.includes('Good Service')) return "Metro Trains operating normally • Good Service";
+        if (html.includes('Major Delays')) return "⚠️ Major Delays reported on Metro";
+        return "Metro Trains operating normally"; 
+      } catch (e) { return "Metro Trains operating normally • Good Service"; }
     }
   }
 
   getPtvUrl(endpoint, params) {
-    // Standard HMAC Signature generation
     const urlObj = new URL(`${this.ptvBaseUrl}${endpoint}`);
     urlObj.searchParams.append('devid', this.ptvCreds.devId);
     Object.keys(params).forEach(k => {
@@ -205,9 +231,7 @@ class DataScraper {
     return urlObj.toString();
   }
 
-  async getWeather() {
-    return { temp: 16, condition: 'Cloudy', icon: '☁️' };
-  }
+  async getWeather() { return { temp: 16, condition: 'Cloudy', icon: '☁️' }; }
 }
 
 module.exports = DataScraper;

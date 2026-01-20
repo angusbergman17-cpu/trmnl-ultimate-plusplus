@@ -128,12 +128,12 @@ class PIDSRenderer {
     const svg = `<svg width="${this.width}" height="${this.height}" xmlns="http://www.w3.org/2000/svg">${svgContent}</svg>`;
 
     // 2. Convert SVG to PNG using Sharp
-    // We force a 16-color palette (4-bit) which maps cleanly to TRMNL's 1-bit or grayscale modes
+    // We force a 8-color palette (3-bit) which maps cleanly to TRMNL's 1-bit or grayscale modes
     try {
         const buffer = await sharp(Buffer.from(svg))
             .png({ 
                 palette: true, 
-                colors: 16,  // Ensures we get distinct gray levels (Black, White, and various grays)
+                colors: 8,  // Ensures we get distinct gray levels (Black, White, and various grays)
                 dither: 1.0  // Apply dithering for smoother gradients if any
             }) 
             .toBuffer();

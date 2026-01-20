@@ -133,7 +133,7 @@ class PIDSRenderer {
         const buffer = await sharp(Buffer.from(svg))
             .png({ 
                 palette: true, 
-                colors: 8,  // Ensures we get distinct gray levels (Black, White, and various grays)
+                colors: 4,  // Ensures we get distinct gray levels (Black, White, and various grays)
                 dither: 1.0  // Apply dithering for smoother gradients if any
             }) 
             .toBuffer();

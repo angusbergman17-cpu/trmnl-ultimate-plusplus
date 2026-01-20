@@ -1,3 +1,8 @@
+/**
+ * ULTIMATE++ Data Scraper (Crash Proof Edition)
+ * * Feature: If API times out, it INSTANTLY loads the static schedule.
+ */
+
 const axios = require('axios');
 const crypto = require('crypto');
 const RssParser = require('rss-parser');
@@ -28,7 +33,14 @@ class DataScraper {
     // 60s Cache Strategy
     if ((now - this.cache.lastApiCall) > 60000) {
         console.log("⚡ Fetching fresh data...");
-        await this.refreshExternalData();
+        try {
+            // Timeout Wrapper: If fetch takes > 5s, throw error to trigger fallback
+            const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("API_TIMEOUT")), 5000));
+            await Promise.race([this.refreshExternalData(), timeout]);
+        } catch (e) {
+            console.log("⚠️ API Timeout or Error. Forcing Static Fallback.");
+            this.forceStaticFallback();
+        }
     }
 
     return {
@@ -37,6 +49,13 @@ class DataScraper {
         weather: this.cache.weather || { temp: '--', condition: '', icon: '?' },
         news: this.cache.news || 'Operating Normally'
     };
+  }
+
+  // FORCE FALLBACK (Used when API dies)
+  forceStaticFallback() {
+      this.cache.rawTrains = this.getStaticDepartures(this.staticSchedule.trainLoop, "Parliament (Sched)");
+      this.cache.rawTrams = this.getStaticDepartures(this.staticSchedule.tram58, "West Coburg (Sched)");
+      this.cache.news = "Data Offline - Using Schedule";
   }
 
   formatResults(items) {
@@ -52,21 +71,15 @@ class DataScraper {
   }
 
   async refreshExternalData() {
-    // 1. TRAINS (API -> Static Fallback)
+    // 1. TRAINS
     let trains = await this.fetchPtvDepartures(0, this.ids.trainStop, [3]);
-    if (trains.length === 0) {
-        console.log("⚠️ PTV API unavailable. Using Static Train Schedule.");
-        trains = this.getStaticDepartures(this.staticSchedule.trainLoop, "Parliament (Sched)");
-    }
+    if (trains.length === 0) trains = this.getStaticDepartures(this.staticSchedule.trainLoop, "Parliament (Sched)");
 
-    // 2. TRAMS (TramTracker -> Static Fallback)
+    // 2. TRAMS
     let trams = await this.fetchTramTracker();
-    if (trams.length === 0) {
-         console.log("⚠️ TramTracker empty. Using Static Tram Schedule.");
-         trams = this.getStaticDepartures(this.staticSchedule.tram58, "West Coburg (Sched)");
-    }
+    if (trams.length === 0) trams = this.getStaticDepartures(this.staticSchedule.tram58, "West Coburg (Sched)");
 
-    // 3. WEATHER & NEWS
+    // 3. EXTRAS
     let weather = await this.getRealWeather().catch(e => null);
     let news = await this.getServiceAlerts().catch(e => "Good Service");
 
@@ -89,6 +102,7 @@ class DataScraper {
               departures.push({ destination, exactTime: departureTime.getTime(), isScheduled: true });
           }
       }
+      // Next Hour Overflow
       for (let m of minutesArray) {
           const minutesUntil = (60 - currentMin) + m;
           const departureTime = new Date(now.getTime() + minutesUntil * 60000);
@@ -97,6 +111,7 @@ class DataScraper {
       return departures.slice(0, 3);
   }
 
+  // --- API CALLS (Kept same as before) ---
   async fetchPtvDepartures(routeType, stopId, platforms) {
     if (!this.keys.ptvDevId) return [];
     try {
@@ -110,11 +125,7 @@ class DataScraper {
             const run = response.data.runs[dep.run_ref];
             if (routeType === 0 && run?.destination_name.includes('Flinders St')) continue;
             let departureTime = new Date(dep.estimated_departure_utc || dep.scheduled_departure_utc);
-            rawData.push({
-                destination: 'Parliament',
-                exactTime: departureTime.getTime(),
-                isScheduled: false
-            });
+            rawData.push({ destination: 'Parliament', exactTime: departureTime.getTime(), isScheduled: false });
           }
       }
       return rawData;
@@ -132,11 +143,7 @@ class DataScraper {
         const now = Date.now();
         for (const pred of predictions) {
             if (pred && pred.minutes) {
-                rawData.push({
-                    destination: pred.destination || 'West Coburg',
-                    exactTime: now + (parseFloat(pred.minutes) * 60000),
-                    isScheduled: false
-                });
+                rawData.push({ destination: pred.destination || 'West Coburg', exactTime: now + (parseFloat(pred.minutes) * 60000), isScheduled: false });
             }
         }
         return rawData;

@@ -24,9 +24,10 @@ app.use((req, res, next) => {
   next();
 });
 
-// --- CORE: THE REFRESH LOOP ---
+// --- TIMER 1: INTERNAL DATA ENGINE (Every 20s) ---
+// This keeps the image "fresh" in memory, ready for manual or auto-refresh
 async function refreshCycle() {
-  console.log("♻️  Starting Refresh Cycle...");
+  console.log("♻️  [Internal] Refreshing Data & Image Cache...");
   
   try {
     // 1. FETCH DATA (Internal Timeout 5s)
@@ -36,11 +37,11 @@ async function refreshCycle() {
         return null;
     });
     
-    // SAFE FALLBACK: If scraper is slow/fails, provide defaults to prevent Crash
+    // SAFE FALLBACK
     const data = await Promise.race([dataFetch, timeout]) || {
         trains: [], 
         trams: [], 
-        weather: {temp: '--', condition: 'Loading...', icon: '?'}, // Must have condition
+        weather: {temp: '--', condition: 'Loading...', icon: '?'},
         news: 'Loading Data...'
     };
 
@@ -54,17 +55,15 @@ async function refreshCycle() {
     // Save to global variable
     currentImageBuffer = newBuffer;
     lastUpdateTime = new Date();
-    console.log("📸 Image Cache Updated!");
-
-    // 4. BROADCAST
-    await broadcastToTrmnl();
+    console.log("📸 [Internal] Image Cache Updated!");
 
   } catch (error) {
     console.error("❌ Cycle Failed:", error);
   }
 }
 
-// --- BROADCASTER ---
+// --- TIMER 2: EXTERNAL BROADCASTER (Every 70s) ---
+// We slow this down to avoid the 429 Rate Limit Error
 async function broadcastToTrmnl() {
   if (!process.env.TRMNL_WEBHOOK_URL) return;
 
@@ -79,10 +78,14 @@ async function broadcastToTrmnl() {
     await axios.post(process.env.TRMNL_WEBHOOK_URL, {
       merge_variables: { markup: htmlMarkup }
     });
-    console.log(`🚀 Webhook Sent`);
+    console.log(`🚀 [External] Webhook Sent (Next in 70s)`);
 
   } catch (e) {
-    console.error("Webhook Error:", e.message);
+    if (e.response && e.response.status === 429) {
+        console.error("⚠️ RATE LIMITED (429): Skipping this broadcast to cool down.");
+    } else {
+        console.error("Webhook Error:", e.message);
+    }
   }
 }
 
@@ -98,9 +101,16 @@ app.get('/api/live-image.png', (req, res) => {
   }
 });
 
-// Start the loop (Every 20 seconds)
+// START TIMERS
+// 1. Data Refresh: Every 20 seconds (Keep cache hot)
 setInterval(refreshCycle, 20000);
-setTimeout(refreshCycle, 2000); // Start 2s after boot
+
+// 2. Broadcast: Every 70 seconds (Avoid 429 Bans)
+setInterval(broadcastToTrmnl, 70000);
+
+// Kickstart immediately
+setTimeout(refreshCycle, 2000); 
+setTimeout(broadcastToTrmnl, 10000); // Wait 10s for first image before broadcasting
 
 app.get('/', (req, res) => res.send(`TRMNL Server Active. Last Update: ${lastUpdateTime ? lastUpdateTime.toLocaleTimeString() : 'Pending...'}`));
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

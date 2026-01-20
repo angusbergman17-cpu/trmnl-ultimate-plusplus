@@ -5,89 +5,91 @@ const CoffeeDecision = require('./coffee-decision');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Initialize your data logic
+// Initialize classes
 const scraper = new DataScraper();
 const coffeeLogic = new CoffeeDecision();
 
-// 1. Allow JSON parsing (Critical for TRMNL)
 app.use(express.json());
 
-// 2. The Main Route (POST) for the Device
 app.post('/api/screen', async (req, res) => {
   console.log("TRMNL Device Requested Update");
 
   try {
-    // A. Fetch Real Data
-    const data = await scraper.fetchAllData();
+    // 1. Set a 10-second timeout for data fetching
+    // (If the scraper hangs, we show the dashboard with '...' instead of crashing)
+    const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 8000, null));
+    const dataPromise = scraper.fetchAllData();
+    
+    // Race: Whichever finishes first wins
+    const data = await Promise.race([dataPromise, timeoutPromise]) || {
+      trains: [], trams: [], weather: {temp: '--', icon: '?'}, news: 'Loading Data...'
+    };
+    
     const coffee = coffeeLogic.calculate();
 
-    // B. Generate HTML (This mimics your 'Browser View' which looked perfect)
+    // 2. HIGH CONTRAST HTML (Black & White Only)
+    // We use 'black' and 'white' explicitly to ensure visibility on e-ink.
     const html = `
-      <div class="view">
-         <div class="layout">
-           <div class="header">
-              <span class="title">${new Date().toLocaleTimeString('en-AU', {hour: '2-digit', minute:'2-digit'})}</span>
-              <div class="status-box" style="background-color: ${coffee.color || '#000'}">
-                 <span class="status-title" style="color: #fff">${coffee.decision}</span>
-                 <span class="status-sub" style="color: #fff">${coffee.timeToSpare}min to spare</span>
-              </div>
-           </div>
-
-           <div class="section tram" style="border-top: 4px solid #78be20;">
-              <div class="title" style="background: #78be20; color: white; padding: 2px 5px;">TRAMS FROM TIVOLI RD</div>
-              ${data.trams.slice(0, 3).map(t => `
-                <div class="row">
-                   <span class="route-badge" style="background: #78be20; color: white; padding: 0 4px;">${t.route}</span>
-                   <span class="dest">${t.destination}</span>
-                   <span class="time">${t.minutes} min</span>
-                </div>
-              `).join('')}
-           </div>
-
-           <div class="section train" style="border-top: 4px solid #0072CE;">
-              <div class="title" style="background: #0072CE; color: white; padding: 2px 5px;">TRAINS FROM SOUTH YARRA</div>
-              ${data.trains.slice(0, 3).map(t => `
-                <div class="row">
-                   <span class="route-badge" style="background: #0072CE; color: white; padding: 0 4px;">${t.platform}</span>
-                   <span class="dest">${t.destination}</span>
-                   <div class="time-group">
-                      <span class="status-text">${t.stopsAll ? 'Stops All' : 'Express'}</span>
-                      <span class="time">${t.minutes} min</span>
-                   </div>
-                </div>
-              `).join('')}
-           </div>
-
-           <div class="footer" style="margin-top: 10px; border-top: 1px solid #ccc; padding-top: 5px;">
-              <span class="temp" style="font-size: 24px; font-weight: bold;">${data.weather.icon} ${data.weather.temp}°C</span>
-              <span class="desc">${data.news}</span>
-           </div>
+      <div class="view view--normal">
+         
+         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid black; padding-bottom: 5px; margin-bottom: 5px;">
+            <span style="font-size: 30px; font-weight: bold; color: black;">
+              ${new Date().toLocaleTimeString('en-AU', {hour: '2-digit', minute:'2-digit'})}
+            </span>
+            <div style="background: black; color: white; padding: 2px 8px; border-radius: 4px;">
+               <span style="font-weight: bold; font-size: 18px;">${coffee.decision}</span>
+            </div>
          </div>
+
+         <div style="margin-bottom: 10px;">
+            <div style="font-weight: bold; text-transform: uppercase; border-bottom: 1px solid black;">Trams (No. 58)</div>
+            ${data.trams.length > 0 ? data.trams.map(t => `
+                <div style="display: flex; justify-content: space-between; margin-top: 4px; font-size: 22px;">
+                   <span>${t.destination}</span>
+                   <span style="font-weight: bold;">${t.minutes} min</span>
+                </div>
+            `).join('') : '<div style="margin-top:4px;">No Trams Found</div>'}
+         </div>
+
+         <div style="background: black; color: white; padding: 5px; border-radius: 4px; margin-bottom: 5px;">
+            <div style="font-weight: bold; text-transform: uppercase; border-bottom: 1px solid white; margin-bottom: 4px;">
+               Trains (Loop)
+            </div>
+            ${data.trains.length > 0 ? data.trains.map(t => `
+                <div style="display: flex; justify-content: space-between; margin-top: 2px; font-size: 20px;">
+                   <span>${t.destination}</span>
+                   <span style="font-weight: bold;">${t.minutes} min</span>
+                </div>
+            `).join('') : '<div>No Trains</div>'}
+         </div>
+
+         <div style="border-top: 2px solid black; padding-top: 5px; display: flex; align-items: center; justify-content: space-between;">
+            <span style="font-size: 24px; font-weight: bold;">${data.weather.temp}°C</span>
+            <span style="font-size: 14px; max-width: 70%; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+              ${data.news}
+            </span>
+         </div>
+
       </div>
     `;
 
-    // C. Send as JSON (The Format TRMNL Polling Expects)
+    // 3. Log HTML length to confirm it generated
+    console.log(`Sending HTML payload (${html.length} chars)`);
     res.json({ markup: html });
 
   } catch (error) {
-    console.error("Error generating screen:", error);
-    res.json({ markup: '<div class="view"><div class="title">ERROR LOADING DATA</div></div>' });
+    console.error("Critical Error:", error);
+    // Emergency Error Screen
+    res.json({ markup: `
+      <div class="view">
+        <div class="title">SYSTEM ERROR</div>
+        <div class="content">${error.message}</div>
+      </div>
+    `});
   }
 });
 
-// 3. Browser Test Route (GET)
-// Visit your URL in Chrome to verify data is fetching
-app.get('/', async (req, res) => {
-  try {
-    const data = await scraper.fetchAllData();
-    res.send(`
-      <h1>Server Online</h1>
-      <p>TRMNL URL: <code>/api/screen</code></p>
-      <pre>${JSON.stringify(data, null, 2)}</pre>
-    `);
-  } catch (e) {
-    res.send("Server Error: " + e.message);
-  }
-});
+// Browser Check Route
+app.get('/', (req, res) => res.send("TRMNL Server Online. Point device to /api/screen"));
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

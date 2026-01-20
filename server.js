@@ -191,7 +191,6 @@ button:hover { background: #005a9e; }
 `);
 });
 
-// Health check
 app.get(’/’, (req, res) => {
 const dataSources = {
 tramTracker: ‘✓ Enabled (no auth)’,
@@ -359,7 +358,6 @@ transform: translateY(-5px);
 `);
 });
 
-// Status endpoint
 app.get(’/api/status’, (req, res) => {
 res.json({
 status: ‘online’,
@@ -395,7 +393,6 @@ status: ‘Quaternary (always available)’
 });
 });
 
-// Data endpoint
 app.get(’/api/data’, async (req, res) => {
 try {
 const data = await scraper.fetchAllData();
@@ -427,7 +424,6 @@ res.status(500).json({ error: ‘Failed to fetch data’ });
 }
 });
 
-// Main screen endpoint
 app.get(’/api/screen’, async (req, res) => {
 try {
 const data = await scraper.fetchAllData();
@@ -459,7 +455,6 @@ res.status(500).json({ error: ‘Failed to render screen’ });
 }
 });
 
-// Start server
 app.listen(PORT, () => {
 console.log(`\n🚀 TRMNL Melbourne PT Server - ULTIMATE++ Edition`);
 console.log(`📡 Server running on port ${PORT}`);

@@ -1,270 +1,210 @@
 /**
- * ULTIMATE++ Data Scraper (Fan Edition)
- * * Improvements for PT Fans:
- * 1. PTV API Authentication (HMAC-SHA1) - Gets REAL data
- * 2. Live Disruptions - Knows when lines are down
- * 3. Run References - Shows the specific Trip ID
+ * ULTIMATE++ Data Scraper (Public Feed Edition)
+ * Strategy:
+ * 1. MIMIC: Use TramTracker's public endpoint for live tram times.
+ * 2. SCRAPE: Read public RSS feeds for "Twitter-style" service alerts.
+ * 3. FALLBACK: Use PTV API only if available, otherwise simulate.
  */
 
 const axios = require('axios');
-const crypto = require('crypto'); // Required for PTV Signature
+const crypto = require('crypto');
+const RssParser = require('rss-parser');
 
 class DataScraper {
   constructor() {
+    this.parser = new RssParser();
+    
+    // Public Feeds (No Keys Required)
+    // These are the official feeds that power the PTV website/app alerts
+    this.publicFeeds = {
+      metro: 'https://www.ptv.vic.gov.au/feeds/rss/lines/2', // Metro Trains
+      trams: 'https://www.ptv.vic.gov.au/feeds/rss/lines/1'  // Yarra Trams
+    };
+
     this.cache = {
       trains: null,
       trams: null,
       weather: null,
       news: null,
-      disruptions: null,
       lastUpdate: null
     };
-    this.cacheTimeout = 30000; // 30 seconds
     
-    // Auth Credentials from Render Environment
+    // Auth Credentials (Optional - for "Gold Standard" data)
     this.ptvCreds = {
       devId: process.env.PTV_DEV_ID || null,
       key: process.env.PTV_KEY || null
     };
 
-    // TramTracker (Still works without Auth)
-    this.tramTrackerConfig = {
-      baseUrl: 'https://www.tramtracker.com.au/Controllers',
-    };
+    // Public API Endpoints (We mimic the apps)
+    this.tramTrackerUrl = 'https://www.tramtracker.com.au/Controllers/GetNextPredictionsForStop.ashx';
+    this.ptvBaseUrl = 'https://timetableapi.ptv.vic.gov.au'; 
     
-    // PTV API Config
-    this.ptvConfig = {
-      baseUrl: 'https://timetableapi.ptv.vic.gov.au/v3',
-    };
-    
-    // Configurable Stops (Defaults to South Yarra / Tivoli Rd if config fails)
+    // Your Stops
     this.stops = {
       southYarra: 1120,
       tivoliRoad: 2189,
     };
   }
 
-  /**
-   * Generates the HMAC-SHA1 Signature required by PTV
-   */
-  getPtvUrl(endpoint, params = {}) {
-    if (!this.ptvCreds.devId || !this.ptvCreds.key) {
-      console.warn('[PTV] Missing Credentials - Requests will likely fail (403)');
-      return `${this.ptvConfig.baseUrl}${endpoint}`;
-    }
-
-    // 1. Construct the URL with DevID
-    const urlObj = new URL(`${this.ptvConfig.baseUrl}${endpoint}`);
-    urlObj.searchParams.append('devid', this.ptvCreds.devId);
-    
-    // Add all other params
-    Object.keys(params).forEach(key => {
-        // Handle array params (e.g. platform_numbers)
-        if (Array.isArray(params[key])) {
-            params[key].forEach(val => urlObj.searchParams.append(key, val));
-        } else {
-            urlObj.searchParams.append(key, params[key]);
-        }
-    });
-
-    // 2. Sign the "Path + Query" part
-    const requestPath = urlObj.pathname + urlObj.search;
-    const signature = crypto.createHmac('sha1', this.ptvCreds.key)
-                            .update(requestPath)
-                            .digest('hex')
-                            .toUpperCase();
-
-    // 3. Append signature
-    urlObj.searchParams.append('signature', signature);
-    return urlObj.toString();
-  }
-
+  // --- MAIN FETCH FUNCTION ---
   async fetchAllData() {
     const now = Date.now();
-    if (this.cache.lastUpdate && (now - this.cache.lastUpdate) < this.cacheTimeout) {
+    // Cache for 30 seconds to prevent rate-limiting
+    if (this.cache.lastUpdate && (now - this.cache.lastUpdate) < 30000) {
       return this.cache;
     }
 
-    try {
-      // Parallel fetch for speed
-      const [trains, trams, weather, news, disruptions] = await Promise.all([
-        this.fetchTrains(),
-        this.fetchTrams(),
-        this.fetchWeather(),
-        this.fetchNews(),
-        this.fetchDisruptions() // Now fetching REAL disruptions
-      ]);
+    // Run scrapers in parallel
+    const [trains, trams, weather, news] = await Promise.all([
+      this.getTrains(), // API or Fallback
+      this.getTrams(),  // Mimics TramTracker
+      this.getWeather(),
+      this.scrapePublicAlerts() // Scrapes RSS
+    ]);
 
-      this.cache = { trains, trams, weather, news, disruptions, lastUpdate: now };
-      return this.cache;
-    } catch (error) {
-      console.error('Error fetching data:', error);
-      return this.cache.lastUpdate ? this.cache : this.getPlaceholderData();
-    }
+    this.cache = { trains, trams, weather, news, lastUpdate: now };
+    return this.cache;
   }
 
-  // ===== TRAINS (PTV API V3) =====
-  
-  async fetchTrains() {
+  // --- 1. SCRAPE PUBLIC ALERTS (Twitter Alternative) ---
+  async scrapePublicAlerts() {
     try {
-      console.log('[TRAINS] Fetching PTV API v3...');
-      // Requesting Route 0 (Train), Stop 1120 (South Yarra)
-      const url = this.getPtvUrl(`/v3/departures/route_type/0/stop/${this.stops.southYarra}`, {
-        platform_numbers: [3], // City bound
-        max_results: 6,
-        expand: ['run', 'route', 'direction'] // Expand for "Fan" details
-      });
-
-      const response = await axios.get(url);
-      const departures = [];
-      const now = new Date();
-
-      if (response.data && response.data.departures) {
-          for (const dep of response.data.departures) {
-            const scheduled = new Date(dep.scheduled_departure_utc);
-            const estimated = dep.estimated_departure_utc ? new Date(dep.estimated_departure_utc) : scheduled;
-            const minutes = Math.round((estimated - now) / 60000);
-
-            if (minutes >= 0 && minutes <= 60) {
-                const run = response.data.runs[dep.run_ref];
-                const route = response.data.routes[dep.route_id];
-                
-                // "Fan" Data: Run ID (e.g., 9421)
-                const runId = dep.run_ref; 
-                
-                departures.push({
-                    destination: this.cleanDestination(run?.destination_name),
-                    platform: dep.platform_number,
-                    minutes: minutes,
-                    stopsAll: !dep.flags.includes('Express'),
-                    line: {
-                        name: route?.route_name || 'Metro',
-                        color: this.getLineColor(route?.route_name)
-                    },
-                    runRef: runId, // New field for fans
-                    realtime: true,
-                    source: 'PTV-API'
-                });
-            }
-          }
-      }
+      // Fetch Metro Trains RSS Feed
+      const feed = await this.parser.parseURL(this.publicFeeds.metro);
       
-      // Sort and take top 3
-      departures.sort((a, b) => a.minutes - b.minutes);
-      return departures.slice(0, 3);
+      // Look for alerts relevant to our lines
+      // We search for keywords like "Cranbourne", "Pakenham", "Frankston"
+      const relevantItem = feed.items.find(item => 
+        item.title && 
+        ['Cranbourne', 'Pakenham', 'Frankston', 'Sandringham'].some(line => item.title.includes(line))
+      );
 
-    } catch (error) {
-      console.log(`[TRAINS] PTV API Failed: ${error.message}`);
-      return this.fetchTrainsFallback(); // Fallback to simulation
+      if (relevantItem) {
+        // Clean up the text (remove "Updated: ..." etc)
+        return `⚠️ ${relevantItem.title.split(':')[0]}`;
+      }
+
+      return "Metro Trains operating normally • Good Service";
+    } catch (e) {
+      console.log("RSS Scrape failed, defaulting to OK");
+      return "Metro Trains operating normally • Good Service";
     }
   }
 
-  // ===== TRAMS (TramTracker) =====
-  async fetchTrams() {
-     // Your existing TramTracker logic is solid and requires no auth.
-     // I've kept it here to ensure continuity.
+  // --- 2. MIMIC TRAMTRACKER (Live Trams) ---
+  async getTrams() {
      try {
-        const url = `${this.tramTrackerConfig.baseUrl}/GetNextPredictionsForStop.ashx`;
-        const response = await axios.get(url, {
+        // This hits the endpoints the mobile app uses (Public/Open)
+        const response = await axios.get(this.tramTrackerUrl, {
             params: { stopNo: this.stops.tivoliRoad, routeNo: 58, isLowFloor: false }
         });
 
         const departures = [];
-        const predictions = Array.isArray(response.data.predictions) ? response.data.predictions : [response.data.predictions];
+        const predictions = Array.isArray(response.data.predictions) 
+            ? response.data.predictions 
+            : [response.data.predictions];
 
         for (const pred of predictions) {
             if (pred) {
                 const minutes = Math.round(pred.minutes || 0);
-                if (minutes >= 0 && minutes <= 60) {
+                // "No Prediction" usually returns huge numbers or null
+                if (minutes >= 0 && minutes < 60) {
                     departures.push({
                         route: '58',
                         destination: pred.destination || 'West Coburg',
                         minutes: minutes,
-                        vehicleNo: pred.vehicleNo, // Fan Detail: Tram ID!
-                        realtime: true,
-                        source: 'TramTracker'
+                        realtime: true 
                     });
                 }
             }
         }
         return departures.sort((a, b) => a.minutes - b.minutes).slice(0, 3);
      } catch (e) {
-         return this.fetchTramsFallback();
+         console.error("TramTracker Mimic Failed:", e.message);
+         return [{ route: '58', destination: 'West Coburg', minutes: 5, realtime: false }];
      }
   }
 
-  // ===== DISRUPTIONS (New!) =====
-  async fetchDisruptions() {
-      if (!this.ptvCreds.devId) return null; // Can't fetch without keys
+  // --- 3. TRAINS (PTV API or Timetable Fallback) ---
+  async getTrains() {
+    // If we have keys, use the official API
+    if (this.ptvCreds.devId && this.ptvCreds.key) {
+      return this.fetchPtvTrains();
+    }
+    
+    // NO KEYS? use this "Timetable" Simulation
+    // (This mimics a weekday schedule if we can't get live data)
+    console.log("No API Keys - Using Static Timetable");
+    return [
+      { destination: 'City Loop', platform: '3', minutes: this.getStaticMinutes(5), stopsAll: true },
+      { destination: 'Flinders St', platform: '3', minutes: this.getStaticMinutes(12), stopsAll: false },
+      { destination: 'City Loop', platform: '3', minutes: this.getStaticMinutes(20), stopsAll: true }
+    ];
+  }
 
-      try {
-          // Fetch disruptions for Metro Trains (Route Type 0)
-          const url = this.getPtvUrl(`/v3/disruptions/route_type/0`, {
-              status: 'current'
-          });
-          const response = await axios.get(url);
-          
-          if (response.data && response.data.disruptions) {
-              // Find "Metro Train" disruptions that contain "Sandringham", "Cranbourne", or "Pakenham"
-              const relevant = response.data.disruptions.find(d => 
-                  d.routes && d.routes.some(r => 
-                      ['Cranbourne', 'Pakenham', 'Frankston', 'Sandringham'].some(line => r.route_name.includes(line))
-                  )
-              );
+  getStaticMinutes(offset) {
+    // Generates a minute count that reduces as time passes (for simulation)
+    const now = new Date();
+    const currentMin = now.getMinutes();
+    let mins = (offset - (currentMin % 10)); 
+    if (mins < 0) mins += 10;
+    return mins;
+  }
 
-              if (relevant) {
-                  // Return the title (e.g., "Buses replace trains...")
-                  return relevant.title; 
-              }
+  // --- PTV API HELPER (If keys exist) ---
+  async fetchPtvTrains() {
+    try {
+      const url = this.getPtvUrl(`/v3/departures/route_type/0/stop/${this.stops.southYarra}`, {
+        platform_numbers: [3],
+        max_results: 4,
+        expand: ['run', 'route']
+      });
+      
+      const response = await axios.get(url);
+      const departures = [];
+      const now = new Date();
+
+      if (response.data?.departures) {
+          for (const dep of response.data.departures) {
+            const scheduled = new Date(dep.scheduled_departure_utc);
+            // Use estimated if available (Real Time), else scheduled
+            const estimated = dep.estimated_departure_utc ? new Date(dep.estimated_departure_utc) : scheduled;
+            const minutes = Math.round((estimated - now) / 60000);
+
+            if (minutes >= 0 && minutes < 90) {
+                departures.push({
+                    destination: 'City Loop', // Simplified for display
+                    platform: dep.platform_number,
+                    minutes: minutes,
+                    stopsAll: !dep.flags.includes('Express'),
+                    realtime: true
+                });
+            }
           }
-          return null; // No relevant disruptions
-      } catch (error) {
-          console.log('[DISRUPTIONS] Failed:', error.message);
-          return null;
       }
+      return departures.sort((a, b) => a.minutes - b.minutes).slice(0, 3);
+    } catch (e) {
+      console.log("PTV API Failed");
+      return []; 
+    }
   }
 
-  // ===== WEATHER & NEWS =====
-  async fetchWeather() { return this.getRealisticMelbourneWeather(); }
-  async fetchNews() { 
-      // Fan feature: If there is a disruption, return that. Else return generic news.
-      if (this.cache.disruptions) return this.cache.disruptions;
-      return "Metro Trains operating normally • Good Service"; 
+  getPtvUrl(endpoint, params) {
+    // Standard HMAC Signature generation
+    const urlObj = new URL(`${this.ptvBaseUrl}${endpoint}`);
+    urlObj.searchParams.append('devid', this.ptvCreds.devId);
+    Object.keys(params).forEach(k => {
+       if(Array.isArray(params[k])) params[k].forEach(v => urlObj.searchParams.append(k, v));
+       else urlObj.searchParams.append(k, params[k]);
+    });
+    const signature = crypto.createHmac('sha1', this.ptvCreds.key)
+      .update(urlObj.pathname + urlObj.search).digest('hex').toUpperCase();
+    urlObj.searchParams.append('signature', signature);
+    return urlObj.toString();
   }
 
-  // ===== HELPERS =====
-  cleanDestination(name) {
-      if (!name) return 'City';
-      if (name.includes('Flinders')) return 'Flinders St';
-      if (name.includes('Southern Cross')) return 'Sth Cross';
-      return 'City Loop';
-  }
-
-  getLineColor(routeName) {
-    if (!routeName) return '#279FD5';
-    const name = routeName.toLowerCase();
-    if (name.includes('cranbourne') || name.includes('pakenham')) return '#279FD5'; // Blue
-    if (name.includes('frankston')) return '#028430'; // Green
-    if (name.includes('sandringham')) return '#F178AF'; // Pink
-    return '#279FD5';
-  }
-
-  // Fallbacks (Simulation)
-  fetchTrainsFallback() {
-      // (Keep your existing simulation logic here just in case keys fail)
-      return [
-        { destination: 'City Loop', platform: '3', minutes: 4, stopsAll: true, line: {name: 'Simulated', color: '#666'}, realtime: false, source: 'Sim' },
-        { destination: 'Flinders St', platform: '3', minutes: 12, stopsAll: false, line: {name: 'Simulated', color: '#666'}, realtime: false, source: 'Sim' }
-      ];
-  }
-  
-  fetchTramsFallback() {
-      return [{ route: '58', destination: 'West Coburg', minutes: 5, realtime: false, source: 'Sim' }];
-  }
-  
-  getRealisticMelbourneWeather() {
-      // (Keep your existing weather logic)
-      return { temp: 16, condition: 'Cloudy', icon: '☁️' };
+  async getWeather() {
+    return { temp: 16, condition: 'Cloudy', icon: '☁️' };
   }
 }
 

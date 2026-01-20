@@ -1,99 +1,68 @@
 const express = require('express');
-const axios = require('axios');
 const DataScraper = require('./data-scraper-ultimate-plus');
 const CoffeeDecision = require('./coffee-decision');
 const PidsRenderer = require('./pids-renderer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const MY_PUBLIC_URL = 'https://trmnl-ultimate-plusplus.onrender.com';
 
 const scraper = new DataScraper();
 const coffeeLogic = new CoffeeDecision();
 const renderer = new PidsRenderer();
 
+// GLOBAL CACHE: Stores the latest image in RAM
 let currentImageBuffer = null;
 let lastUpdateTime = null;
 
-app.use(express.json());
-
-app.use((req, res, next) => {
-  if (req.url !== '/') console.log(`[${new Date().toLocaleTimeString()}] 📨 ${req.method} ${req.url}`);
-  next();
-});
-
-// --- TIMER 1: INTERNAL DATA ENGINE (Every 20s) ---
+// --- 1. INTERNAL ENGINE (Runs every 60s) ---
+// Keeps data fresh in the background so there is NO waiting when TRMNL asks.
 async function refreshCycle() {
-  console.log("♻️  [Internal] Refreshing Data & Image Cache...");
+  console.log("♻️  Refueling Cache...");
   
   try {
-    const timeout = new Promise(resolve => setTimeout(resolve, 5000, null));
-    const dataFetch = scraper.fetchAllData().catch(e => {
-        console.error("Scraper Error:", e.message);
-        return null;
-    });
-    
-    const data = await Promise.race([dataFetch, timeout]) || {
-        trains: [], trams: [], weather: {temp: '--', condition: 'Loading...', icon: '?'}, news: 'Loading Data...'
-    };
+    // Fetch Data (Timeout 10s)
+    const data = await scraper.fetchAllData().catch(e => ({
+        trains: [], trams: [], weather: {temp: '--', condition: 'Offline', icon: '?'}, news: 'Offline'
+    }));
 
-    // --- COFFEE LOGIC UPGRADE ---
+    // Logic
     const nextTrainMin = (data.trains && data.trains[0]) ? data.trains[0].minutes : 99;
-    
-    // We now pass the TRAMS to the decision engine
     const coffee = coffeeLogic.calculate(nextTrainMin, data.trams);
-    // -----------------------------
 
-    const newBuffer = await renderer.render(data, coffee, true);
-    currentImageBuffer = newBuffer;
+    // Render & Save to RAM
+    currentImageBuffer = await renderer.render(data, coffee, true);
     lastUpdateTime = new Date();
-    console.log("📸 [Internal] Image Cache Updated!");
+    console.log("📸 Image Ready (" + lastUpdateTime.toLocaleTimeString('en-AU', {timeZone:'Australia/Melbourne'}) + ")");
 
   } catch (error) {
-    console.error("❌ Cycle Failed:", error);
+    console.error("❌ Cycle Failed:", error.message);
   }
 }
 
-// --- TIMER 2: EXTERNAL BROADCASTER (Every 70s) ---
-async function broadcastToTrmnl() {
-  if (!process.env.TRMNL_WEBHOOK_URL) return;
-
-  try {
-    const imageUrl = `${MY_PUBLIC_URL}/api/live-image.png?t=${Date.now()}`;
-    const htmlMarkup = `
-      <div class="view view--normal" style="padding:0; margin:0; width:100%; height:100%; overflow:hidden; background:white;">
-         <img src="${imageUrl}" style="width:100%; height:100%; object-fit:contain;" />
-      </div>
-    `;
-
-    await axios.post(process.env.TRMNL_WEBHOOK_URL, {
-      merge_variables: { markup: htmlMarkup }
-    });
-    console.log(`🚀 [External] Webhook Sent (Next in 70s)`);
-
-  } catch (e) {
-    if (e.response && e.response.status === 429) {
-        console.error("⚠️ RATE LIMITED (429): Skipping this broadcast to cool down.");
-    } else {
-        console.error("Webhook Error:", e.message);
-    }
-  }
-}
-
+// --- 2. THE ENDPOINT (TRMNL visits this) ---
 app.get('/api/live-image.png', (req, res) => {
   if (currentImageBuffer) {
       res.set('Content-Type', 'image/png');
-      res.set('Cache-Control', 'no-cache');
+      res.set('Cache-Control', 'no-cache, no-store, must-revalidate'); // Force fresh load
       res.send(currentImageBuffer);
+      console.log("⚡ Served Image to TRMNL");
   } else {
-      res.status(503).send("Warming up...");
+      res.status(503).send("Booting up...");
   }
 });
 
-setInterval(refreshCycle, 20000);
-setInterval(broadcastToTrmnl, 70000);
-setTimeout(refreshCycle, 2000); 
-setTimeout(broadcastToTrmnl, 10000);
+// For Manual Refresh button in Dashboard
+app.all('/api/screen', (req, res) => {
+   // Points TRMNL to the image route
+   const imageUrl = `https://trmnl-ultimate-plusplus.onrender.com/api/live-image.png?t=${Date.now()}`;
+   res.json({ 
+       markup: `<div class="view" style="padding:0; margin:0; background:white;"><img src="${imageUrl}" style="width:100%;" /></div>` 
+   });
+});
 
-app.get('/', (req, res) => res.send(`TRMNL Server Active. Last Update: ${lastUpdateTime ? lastUpdateTime.toLocaleTimeString() : 'Pending...'}`));
+// Start Engine
+setInterval(refreshCycle, 60000); // Update cache every 60s
+setTimeout(refreshCycle, 2000);   // First run on boot
+
+app.get('/', (req, res) => res.send("TRMNL Server Online"));
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

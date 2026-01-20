@@ -24,22 +24,32 @@ app.use((req, res, next) => {
 async function refreshCycle() {
   console.log("♻️  Refreshing Data...");
   try {
-    const timeout = new Promise((resolve, reject) => setTimeout(() => reject(new Error("Timeout")), 15000));
-    
-    const data = await Promise.race([scraper.fetchAllData(), timeout]).catch(e => {
-        console.error("Scraper Error:", e.message);
-        return { trains: [], trams: [], weather: {temp: '--', condition: 'Data Offline', icon: '?'}, news: 'Connection Error' };
+    // 1. Fetch Data with hard fallback
+    // If scraper fails, return SAFE empty arrays
+    const data = await scraper.fetchAllData().catch(e => {
+        console.error("Scraper Critical Fail:", e.message);
+        return { 
+            trains: [], 
+            trams: [], 
+            weather: {temp: '--', condition: 'Offline', icon: '?'}, 
+            news: 'Offline' 
+        };
     });
 
+    // 2. Safe Logic Access
     const nextTrainMin = (data.trains && data.trains[0]) ? data.trains[0].minutes : 99;
-    const coffee = coffeeLogic.calculate(nextTrainMin, data.trams, data.news);
+    
+    // 3. EXECUTE LOGIC (Now safe because calculate() is restored)
+    const coffee = coffeeLogic.calculate(nextTrainMin, data.trams || [], data.news || "");
 
+    // 4. Render
     currentImageBuffer = await renderer.render(data, coffee, true);
     lastUpdateTime = new Date();
     console.log("📸 Image Updated Successfully");
 
   } catch (error) {
     console.error("CRITICAL CYCLE FAILURE:", error.message);
+    if (error.stack) console.error(error.stack);
   }
 }
 

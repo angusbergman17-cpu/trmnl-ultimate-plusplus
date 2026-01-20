@@ -1,73 +1,99 @@
-const sharp = require('sharp');
+/**
+ * COFFEE DECISION ENGINE (Repair Edition)
+ * Restored the calculate() function that was causing the crash.
+ */
 
-class PidsRenderer {
+class CoffeeDecision {
   constructor() {
-    this.width = 800;
-    this.height = 480;
+    this.commute = {
+      walkToWork: 6,   // Parliament -> 80 Collins
+      homeToNorman: 4, 
+      makeCoffee: 6,   
+      normanToTram: 1, 
+      tramRide: 5,     
+      platformChange: 3,
+      trainRide: 9     
+    };
   }
 
-  async render(data, coffee, invert = false) {
-    try {
-      const now = new Date();
-      const timeFormatter = new Intl.DateTimeFormat('en-AU', {
-          timeZone: 'Australia/Melbourne', hour: '2-digit', minute: '2-digit', hour12: false
-      });
-      const timeStr = timeFormatter.format(now);
+  getMelbourneTime() {
+    const now = new Date();
+    // UTC+11 (Manually fixed for Melbourne)
+    return new Date(now.getTime() + (11 * 60 * 60 * 1000));
+  }
 
-      const isUrgent = coffee && coffee.urgent;
-      const boxFill = isUrgent ? "white" : "black";
-      const textFill = isUrgent ? "black" : "white";
-      const boxStroke = isUrgent ? 'stroke="black" stroke-width="4"' : '';
-      const decisionText = (coffee && coffee.decision) ? coffee.decision.toUpperCase() : "LOADING...";
-      const subText = (coffee && coffee.subtext) ? coffee.subtext : "";
+  isDisrupted(newsText) {
+    if (!newsText) return false;
+    const badWords = ['Major Delays', 'Suspended', 'Buses replace', 'Cancellation'];
+    return badWords.some(word => newsText.includes(word));
+  }
 
-      const svg = `
-      <svg width="${this.width}" height="${this.height}" xmlns="http://www.w3.org/2000/svg">
-        <style>
-          .base { font-family: sans-serif; fill: black; }
-          .white { fill: white; }
-          .line { stroke: black; stroke-width: 3; }
-        </style>
-        
-        <rect width="100%" height="100%" fill="white" />
-        <text x="20" y="65" font-size="60" font-weight="900" class="base">${timeStr}</text>
-        
-        <rect x="400" y="15" width="380" height="60" fill="${boxFill}" rx="8" ${boxStroke} />
-        <text x="590" y="57" font-size="28" font-weight="bold" fill="${textFill}" text-anchor="middle">${decisionText}</text>
+  // --- THIS WAS MISSING ---
+  calculate(nextTrainMin, tramData, newsText) {
+    const now = this.getMelbourneTime();
+    const day = now.getUTCDay(); // 0=Sun, 6=Sat
+    const currentHour = now.getUTCHours();
+    const currentMin = now.getUTCMinutes();
+    const currentTimeInMins = currentHour * 60 + currentMin;
 
-        <rect x="20" y="90" width="800" height="32" fill="black" />
-        <text x="30" y="116" font-size="22" font-weight="bold" fill="white">TRAM 58 (TO WEST COBURG)</text>
-        <g transform="translate(20, 132)">${this.renderList(data.trams, "NO TRAMS - CHECK SCHEDULE", 3)}</g>
-
-        <rect x="20" y="260" width="800" height="32" fill="black" />
-        <text x="30" y="286" font-size="22" font-weight="bold" fill="white">TRAINS (CITY LOOP)</text>
-        <g transform="translate(20, 302)">${this.renderList(data.trains, "NO TRAINS - CHECK SCHEDULE", 3)}</g>
-
-        <line x1="20" y1="425" x2="780" y2="425" class="line" />
-        <text x="20" y="465" font-size="32" font-weight="bold" class="base">
-          ${data.weather ? (data.weather.temp + '° ' + data.weather.icon) : '--'}
-        </text>
-        <text x="160" y="465" font-size="24" class="base" fill="#444">
-          ${data.weather ? data.weather.condition : ''}
-        </text>
-        <text x="780" y="465" font-size="20" text-anchor="end" class="base">${subText}</text>
-      </svg>
-      `;
-      return await sharp(Buffer.from(svg)).png().toBuffer();
-    } catch (e) {
-      return await sharp({ create: { width: 800, height: 480, channels: 3, background: { r: 255, g: 255, b: 255 } } }).png().toBuffer();
+    // 1. INTERRUPTION
+    if (this.isDisrupted(newsText)) {
+        return { decision: "SKIP COFFEE", subtext: "Network Alert! Go direct.", canGet: false, urgent: true };
     }
-  }
 
-  renderList(items, emptyMsg, limit = 3) {
-    if (!items || items.length === 0) return `<text x="10" y="20" font-size="24" fill="#555" font-style="italic">${emptyMsg}</text>`;
-    return items.slice(0, limit).map((item, i) => {
-        const y = i * 40; 
-        const schedIndicator = item.isScheduled ? "*" : ""; 
-        let timeDisplay = item.minutes > 59 ? "at " + new Date(item.exactTime).toLocaleTimeString('en-AU', {timeZone: 'Australia/Melbourne', hour: '2-digit', minute: '2-digit', hour12: false}) : `${item.minutes} min`;
-        return `<text x="0" y="${y}" font-size="32" font-weight="bold" class="base">${timeDisplay}${schedIndicator}</text><text x="180" y="${y}" font-size="28" class="base">${item.destination}</text>`;
-    }).join('');
+    // 2. WEEKEND MODE
+    if (day === 0 || day === 6) {
+        if (nextTrainMin > 15) return { decision: "WEEKEND VIBES", subtext: `Next train in ${nextTrainMin}m`, canGet: true, urgent: false };
+        return { decision: "CATCH TRAIN", subtext: `Train departing in ${nextTrainMin}m`, canGet: true, urgent: false };
+    }
+
+    // 3. AFTER 9 AM (Standard)
+    if (currentHour >= 9) {
+        if (nextTrainMin > 15) return { decision: "GET COFFEE", subtext: `Next train in ${nextTrainMin}m`, canGet: true, urgent: false };
+        return { decision: "RUSH IT", subtext: "Train is approaching", canGet: false, urgent: true };
+    }
+
+    // 4. BEFORE 9 AM (80 Collins Commute)
+    const target9am = 9 * 60; // 540 mins
+    
+    const tripDirect = 4 + 5 + 3 + 9 + this.commute.walkToWork; // ~27 mins
+    const tripWithCoffee = tripDirect + this.commute.makeCoffee + 1; // ~34 mins
+
+    const minsUntil9am = target9am - currentTimeInMins;
+
+    if (minsUntil9am < tripDirect) {
+        return { 
+            decision: "LATE FOR WORK", 
+            subtext: `Only ${minsUntil9am}m to 9am! (Need ${tripDirect}m)`, 
+            canGet: false, urgent: true 
+        };
+    }
+
+    if (minsUntil9am < tripWithCoffee) {
+        return { 
+            decision: "SKIP COFFEE", 
+            subtext: `Need ${tripWithCoffee}m. Have ${minsUntil9am}m.`, 
+            canGet: false, urgent: true
+        };
+    }
+
+    const coffeeReadyTime = this.commute.homeToNorman + this.commute.makeCoffee;
+    const bestTram = tramData ? tramData.find(t => t.minutes >= coffeeReadyTime) : null;
+
+    if (bestTram) {
+         return { 
+            decision: "GET COFFEE", 
+            subtext: `Tram in ${bestTram.minutes}m -> 80 Collins by 9am`, 
+            canGet: true, urgent: false
+        };
+    } else {
+        return { 
+            decision: "GET COFFEE", 
+            subtext: `${minsUntil9am}m buffer before 9am meeting`, 
+            canGet: true, urgent: false
+        };
+    }
   }
 }
 
-module.exports = PidsRenderer;
+module.exports = CoffeeDecision;

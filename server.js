@@ -36,8 +36,12 @@ async function refreshCycle() {
         return null;
     });
     
+    // SAFE FALLBACK: If scraper is slow/fails, provide defaults to prevent Crash
     const data = await Promise.race([dataFetch, timeout]) || {
-        trains: [], trams: [], weather: {temp: '--', condition: 'Loading...', icon: '?'}, news: 'Loading Data...'
+        trains: [], 
+        trams: [], 
+        weather: {temp: '--', condition: 'Loading...', icon: '?'}, // Must have condition
+        news: 'Loading Data...'
     };
 
     // 2. LOGIC

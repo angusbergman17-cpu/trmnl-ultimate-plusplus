@@ -11,72 +11,77 @@ const coffeeLogic = new CoffeeDecision();
 app.use(express.json());
 
 app.post('/api/screen', async (req, res) => {
-  // 1. Force Melbourne Time
-  const now = new Date().toLocaleString("en-US", {timeZone: "Australia/Melbourne"});
-  const timeStr = new Date(now).toLocaleTimeString('en-AU', {hour: '2-digit', minute:'2-digit'});
-  
-  console.log(`[${timeStr}] Device Update Request`);
+  console.log("Device Requested Update");
 
   try {
-    const data = await scraper.fetchAllData();
+    // 1. SAFE TIME CALCULATION (Avoids Server Crash)
+    // Manually adjust UTC to Melbourne Time (UTC+11 for DST)
+    const now = new Date();
+    const melbourneTime = new Date(now.getTime() + (11 * 60 * 60 * 1000));
+    const timeStr = melbourneTime.toISOString().substr(11, 5); // HH:MM
+
+    // 2. FETCH DATA (With Error Safety)
+    const data = await scraper.fetchAllData().catch(e => ({
+        trains: [], trams: [], weather: {temp: '--', icon: '?'}, news: 'Data Error'
+    }));
     
-    // 2. Coffee Logic (Passes the next train minutes to the decision engine)
-    const nextTrainMin = data.trains[0] ? data.trains[0].minutes : 99;
+    // 3. COFFEE LOGIC
+    const nextTrainMin = (data.trains && data.trains[0]) ? data.trains[0].minutes : 99;
     const coffee = coffeeLogic.calculate(nextTrainMin);
 
-    // 3. HIGH CONTRAST RENDER
+    // 4. HIGH VISIBILITY HTML (Forces White Background)
     const html = `
-      <div class="view view--normal">
+      <div class="view view--normal" style="background-color: white; color: black; height: 100%; width: 100%; position: absolute; top:0; left:0; padding: 5px;">
          
-         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid black; padding-bottom: 5px; margin-bottom: 5px;">
-            <span style="font-size: 34px; font-weight: bold; color: black;">${timeStr}</span>
+         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid black; padding-bottom: 5px; margin-bottom: 10px;">
+            <span style="font-size: 38px; font-weight: bold; color: black;">${timeStr}</span>
             <div style="text-align: right;">
-               <div style="font-weight: bold; font-size: 16px; background: black; color: white; padding: 2px 6px;">${coffee.decision}</div>
-               <div style="font-size: 12px; margin-top: 2px;">${coffee.subtext}</div>
+               <div style="font-weight: bold; font-size: 18px; background: black; color: white; padding: 4px 8px; border-radius: 4px;">${coffee.decision}</div>
+               <div style="font-size: 14px; margin-top: 2px;">${coffee.subtext}</div>
             </div>
          </div>
 
-         <div style="margin-bottom: 8px;">
-            <div style="font-weight: bold; text-transform: uppercase; border-bottom: 1px solid black; font-size: 14px;">Trams (No. 58)</div>
+         <div style="margin-bottom: 15px;">
+            <div style="font-weight: bold; text-transform: uppercase; border-bottom: 2px solid black; font-size: 16px; margin-bottom: 5px;">Trams (No. 58)</div>
             ${data.trams.length > 0 ? data.trams.map(t => `
-                <div style="display: flex; justify-content: space-between; margin-top: 2px; font-size: 20px;">
+                <div style="display: flex; justify-content: space-between; margin-top: 4px; font-size: 24px; font-weight: 500;">
                    <span>${t.destination}</span>
                    <span style="font-weight: bold;">${t.minutes} min</span>
                 </div>
-            `).join('') : '<div style="margin-top:2px;">No Trams</div>'}
+            `).join('') : '<div style="font-size: 20px;">No Trams Found</div>'}
          </div>
 
-         <div style="background: black; color: white; padding: 4px; border-radius: 4px; margin-bottom: 5px;">
-            <div style="font-weight: bold; text-transform: uppercase; border-bottom: 1px solid white; font-size: 14px; margin-bottom: 2px;">
+         <div style="background: black; color: white; padding: 8px; border-radius: 6px; margin-bottom: 10px;">
+            <div style="font-weight: bold; text-transform: uppercase; border-bottom: 2px solid white; font-size: 16px; margin-bottom: 5px;">
                Trains (Parliament)
             </div>
             ${data.trains.length > 0 ? data.trains.map(t => `
-                <div style="display: flex; justify-content: space-between; margin-top: 2px; font-size: 18px;">
+                <div style="display: flex; justify-content: space-between; margin-top: 4px; font-size: 22px;">
                    <span>${t.destination}</span>
                    <span style="font-weight: bold;">${t.minutes} min</span>
                 </div>
-            `).join('') : '<div>No Trains</div>'}
+            `).join('') : '<div style="font-size: 20px;">No Trains</div>'}
          </div>
 
-         <div style="border-top: 2px solid black; padding-top: 5px; display: flex; align-items: center; justify-content: space-between;">
-            <span style="font-size: 22px; font-weight: bold;">${data.weather.temp}°C ${data.weather.icon}</span>
-            <span style="font-size: 12px; max-width: 60%; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+         <div style="border-top: 3px solid black; padding-top: 5px; display: flex; align-items: center; justify-content: space-between;">
+            <span style="font-size: 28px; font-weight: bold;">${data.weather.temp}°C ${data.weather.icon}</span>
+            <span style="font-size: 14px; max-width: 55%; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
               ${data.news}
             </span>
          </div>
       </div>
     `;
 
-    // 4. RAPID REFRESH HEADERS
+    // 5. STABLE REFRESH (60s to prevent 'black screen' loops)
     res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.set('Refresh', '10');      // Tells browser/device to reload in 10s
-    res.set('X-TRMNL-Timer', '10'); // TRMNL hint
+    res.set('Refresh', '60'); 
 
     res.json({ markup: html });
 
   } catch (error) {
-    console.error("Error:", error);
-    res.json({ markup: `<div>ERROR: ${error.message}</div>` });
+    console.error("Critical Error:", error);
+    // Print the error on the screen so we can see WHAT is failing
+    res.json({ markup: `<div style="background:white; color:black; font-size: 20px; padding: 20px;">SYSTEM ERROR:<br>${error.message}</div>` });
   }
 });
 

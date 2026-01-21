@@ -1,3 +1,4 @@
+require('dotenv').config(); // Load environment variables
 const express = require('express');
 const DataScraper = require('./data-scraper-ultimate-plus');
 const CoffeeDecision = require('./coffee-decision');

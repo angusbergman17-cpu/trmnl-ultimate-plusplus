@@ -15,10 +15,6 @@ class DataScraper {
       gtfsKey: process.env.GTFS_API_KEY || null,
       weather: process.env.WEATHER_KEY || null
     };
-    
-    // Diagnostic logging
-    console.log('🔑 GTFS API Key loaded:', this.keys.gtfsKey ? `${this.keys.gtfsKey.substring(0, 10)}...` : 'NOT FOUND');
-    console.log('🔑 Weather Key loaded:', this.keys.weather ? 'YES' : 'NO');
 
     // STATIC BACKUP SCHEDULE (Minutes past the hour)
     this.staticSchedule = {
@@ -130,10 +126,7 @@ class DataScraper {
       const response = await axios.get(
         'https://api.opendata.transport.vic.gov.au/opendata/public-transport/gtfs/realtime/v1/metro/trip-updates',
         {
-          headers: { 
-  'Ocp-Apim-Subscription-Key': this.keys.gtfsKey,
-  'KeyId': this.keys.gtfsKey
-}
+          headers: { 'Ocp-Apim-Subscription-Key': this.keys.gtfsKey },
           responseType: 'arraybuffer',
           timeout: 5000
         }
@@ -179,11 +172,6 @@ class DataScraper {
 
     } catch (e) {
       console.error("❌ GTFS Train fetch failed:", e.message);
-      if (e.response) {
-        console.error("   Status:", e.response.status);
-        console.error("   Status Text:", e.response.statusText);
-        console.error("   Headers:", JSON.stringify(e.response.headers));
-      }
       return [];
     }
   }
@@ -237,10 +225,6 @@ class DataScraper {
 
     } catch (e) {
       console.error("❌ GTFS Tram fetch failed:", e.message);
-      if (e.response) {
-        console.error("   Status:", e.response.status);
-        console.error("   Status Text:", e.response.statusText);
-      }
       return [];
     }
   }

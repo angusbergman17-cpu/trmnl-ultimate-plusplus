@@ -71,7 +71,10 @@ app.get('/api/live-image.png', async (req, res) => {
 });
 
 app.all('/api/screen', (req, res) => {
-   const imageUrl = `https://trmnl-ultimate-plusplus.onrender.com/api/live-image.png?t=${Date.now()}`;
+   // Use the actual host from the request, or fall back to Render URL
+   const host = req.get('host') || 'trmnl-ultimate-plusplus.onrender.com';
+   const protocol = req.protocol || 'https';
+   const imageUrl = `${protocol}://${host}/api/live-image.png?t=${Date.now()}`;
    res.json({ markup: `<div class="view" style="padding:0; margin:0; background:white;"><img src="${imageUrl}" style="width:100%;" /></div>` });
 });
 

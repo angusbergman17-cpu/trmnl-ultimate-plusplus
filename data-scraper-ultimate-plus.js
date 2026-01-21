@@ -130,7 +130,10 @@ class DataScraper {
       const response = await axios.get(
         'https://api.opendata.transport.vic.gov.au/opendata/public-transport/gtfs/realtime/v1/metro/trip-updates',
         {
-          headers: { 'KeyId': this.keys.gtfsKey },
+          headers: { 
+  'Ocp-Apim-Subscription-Key': this.keys.gtfsKey,
+  'KeyId': this.keys.gtfsKey
+}
           responseType: 'arraybuffer',
           timeout: 5000
         }

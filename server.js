@@ -83,4 +83,16 @@ setInterval(refreshCycle, 60000);
 setTimeout(refreshCycle, 1000);   
 
 app.get('/', (req, res) => res.send("TRMNL Server Online"));
+
+// Debug endpoint to check environment variables
+app.get('/debug/env', (req, res) => {
+  res.json({
+    GTFS_API_KEY_present: !!process.env.GTFS_API_KEY,
+    GTFS_API_KEY_length: process.env.GTFS_API_KEY ? process.env.GTFS_API_KEY.length : 0,
+    GTFS_API_KEY_preview: process.env.GTFS_API_KEY ? process.env.GTFS_API_KEY.substring(0, 10) + '...' : 'NOT SET',
+    WEATHER_KEY_present: !!process.env.WEATHER_KEY,
+    all_env_keys: Object.keys(process.env).filter(k => k.includes('GTFS') || k.includes('WEATHER'))
+  });
+});
+
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

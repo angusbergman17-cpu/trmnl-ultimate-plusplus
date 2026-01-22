@@ -1,11 +1,16 @@
 services:
   - type: web
     name: trmnl-ultimate-plusplus
-    env: node
-    buildCommand: npm install && npx puppeteer browsers install chrome
-    startCommand: npm start
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: npm ci --prefer-offline --no-audit --progress=false --loglevel=error
+    startCommand: node server.js
+    healthCheckPath: /
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
-        value: "false"
+      - key: GTFS_API_KEY
+        sync: false
+      - key: WEATHER_KEY
+        sync: false

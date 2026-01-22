@@ -1,15 +1,18 @@
 services:
   - type: web
     name: trmnl-ultimate-plusplus
-    runtime: node
+    env: node
     region: oregon
     plan: free
-    buildCommand: npm ci --prefer-offline --no-audit --progress=false --loglevel=error
+    branch: main
+    buildCommand: npm install --prefer-offline --no-audit --progress=false --loglevel=error
     startCommand: node server.js
     healthCheckPath: /
     envVars:
       - key: NODE_ENV
         value: production
+      - key: NODE_VERSION
+        value: 20.11.0
       - key: GTFS_API_KEY
         sync: false
       - key: WEATHER_KEY

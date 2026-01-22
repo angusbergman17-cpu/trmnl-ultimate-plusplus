@@ -1,12 +1,31 @@
 /**
  * TRMNL Melbourne PT - Configuration
- * 
- * Edit these values to customize your display!
+ * * Edit these values to customize your display!
  * Changes take effect on next refresh (no need to redeploy)
  */
 
 module.exports = {
-  // ===== DISPLAY SETTINGS =====
+  // =========================================================
+  // 1. PTV API CREDENTIALS & NETWORK SETTINGS (NEW)
+  // =========================================================
+  ptv: {
+    // [ACTION REQUIRED] Insert your PTV User ID (Dev ID) here.
+    // This is the integer number (e.g. 3001234) found next to your email.
+    devId: 'INSERT_YOUR_DEV_ID_HERE',      
+
+    // Your Open Data API Key
+    apiKey: 'ce606b90-9ffb-43e8-bcd7-0c2bd0498367'     
+  },
+
+  // Request Timeout (15s) to fix "TramTracker timeout"
+  timeout: 15000, 
+  
+  // Header required for Service Alerts permission
+  serviceAlertsHeader: 'Ocp-Apim-Subscription-Key',
+
+  // =========================================================
+  // 2. DISPLAY SETTINGS
+  // =========================================================
   display: {
     width: 800,
     height: 480,
@@ -24,7 +43,7 @@ module.exports = {
   // Metro/TramTracker colors mapped to grayscale
   colors: {
     // Metro train lines (RGB → Grayscale)
-    metroBlueLine: '#5A5A5A',     // Pakenham/Cranbourne
+    metroBlueLine: '#5A5A5A',      // Pakenham/Cranbourne
     frankston: '#6E6E6E',          // Frankston line
     sandringham: '#808080',        // Sandringham line
     glenWaverley: '#5A5A5A',       // Glen Waverley line
@@ -45,7 +64,7 @@ module.exports = {
       height: 80,
       showTime: true,
       showCoffeeDecision: true,
-      timePosition: 'left',     // left, center, right
+      timePosition: 'left',      // left, center, right
       coffeePadding: 20
     },
     
@@ -137,15 +156,17 @@ module.exports = {
     // Train stop
     train: {
       name: 'South Yarra',
-      stopId: 1120,           // PTV stop ID
-      platform: 5,             // Platform number
-      gtfsStopId: '19946'     // GTFS stop ID
+      // UPDATED: Using 19946 (Platform 5) instead of 1120 (Parent) 
+      // to ensure "0 departures" error is fixed.
+      stopId: 19946,            // PTV stop ID 
+      platform: 5,              // Platform number
+      gtfsStopId: '19946'       // GTFS stop ID
     },
     
     // Tram stop
     tram: {
       name: 'Tivoli Road',
-      stopId: 2189,           // TramTracker ID
+      stopId: 2189,            // TramTracker ID
       route: 58,               // Route number
       direction: 'West Coburg'
     },
@@ -153,7 +174,7 @@ module.exports = {
     // Destination for coffee decision
     destination: {
       name: '80 Collins St',
-      walkTime: 10            // Minutes from train station
+      walkTime: 10             // Minutes from train station
     }
   },
 
@@ -174,7 +195,7 @@ module.exports = {
   // ===== DEBUG =====
   debug: {
     showBoundingBoxes: false,   // Show layout boxes
-    verboseLogging: true,        // Log data source attempts
-    simulateDataSource: null     // Force a data source: 'PTV', 'GTFS', 'Simulation'
+    verboseLogging: true,       // Log data source attempts
+    simulateDataSource: null    // Force a data source: 'PTV', 'GTFS', 'Simulation'
   }
 };

@@ -1,201 +1,57 @@
-/**
- * TRMNL Melbourne PT - Configuration
- * * Edit these values to customize your display!
- * Changes take effect on next refresh (no need to redeploy)
- */
 
+// config.js
 module.exports = {
-  // =========================================================
-  // 1. PTV API CREDENTIALS & NETWORK SETTINGS (NEW)
-  // =========================================================
-  ptv: {
-    // [ACTION REQUIRED] Insert your PTV User ID (Dev ID) here.
-    // This is the integer number (e.g. 3001234) found next to your email.
-    devId: 'INSERT_YOUR_DEV_ID_HERE',      
-
-    // Your Open Data API Key
-    apiKey: 'ce606b90-9ffb-43e8-bcd7-0c2bd0498367'     
+  app: {
+    port: process.env.PORT || 10000,
+    refreshSeconds: 60,           // how often to refresh data
+    imageRefreshSeconds: 60,      // how often to re-render image
+    timezone: 'Australia/Melbourne'
   },
 
-  // Request Timeout (15s) to fix "TramTracker timeout"
-  timeout: 15000, 
-  
-  // Header required for Service Alerts permission
-  serviceAlertsHeader: 'Ocp-Apim-Subscription-Key',
-
-  // =========================================================
-  // 2. DISPLAY SETTINGS
-  // =========================================================
-  display: {
-    width: 800,
-    height: 480,
-    
-    // Grayscale levels for e-ink (0 = white, 15 = black)
-    grayscale: {
-      background: 15,      // Black background
-      text: 0,             // White text
-      accent: 7,           // Mid-gray for accents
-      dimmed: 10           // Slightly dimmed text
-    }
+  // IMPORTANT: these are the PUBLIC stop codes users see at stops/apps (PTV/TramTracker).
+  // We will translate them to GTFS stop_id at runtime. Keep using the numbers you know.
+  trains: {
+    label: 'Trains',
+    // Example: South Yarra platforms (public codes). Replace with yours if needed.
+    stopCodes: ['19842','19843','19840','19841','19844','19845'],
+    maxDepartures: 6
   },
 
-  // ===== COLOR SCHEME =====
-  // Metro/TramTracker colors mapped to grayscale
-  colors: {
-    // Metro train lines (RGB → Grayscale)
-    metroBlueLine: '#5A5A5A',      // Pakenham/Cranbourne
-    frankston: '#6E6E6E',          // Frankston line
-    sandringham: '#808080',        // Sandringham line
-    glenWaverley: '#5A5A5A',       // Glen Waverley line
-    
-    // Tram routes
-    yarraGreen: '#6E6E6E',         // Route 58
-    
-    // Coffee decision colors
-    coffeeGo: '#CCCCCC',           // Light gray (GET COFFEE)
-    coffeeHurry: '#999999',        // Medium gray (RUSH IT)
-    coffeeNo: '#666666',           // Dark gray (NO TIME)
-    coffeeText: '#000000'          // Black text
+  trams: {
+    label: 'Trams',
+    // Example: Route 58 Tivoli Rd stop public code
+    stopCodes: ['2189'],
+    routesFilter: [],            // optional, e.g. ['aus:vic:vic-03-58:']
+    maxDepartures: 6
   },
 
-  // ===== LAYOUT SECTIONS =====
-  layout: {
-    topBar: {
-      height: 80,
-      showTime: true,
-      showCoffeeDecision: true,
-      timePosition: 'left',      // left, center, right
-      coffeePadding: 20
-    },
-    
-    tramsSection: {
-      height: 140,
-      showRouteNumber: true,
-      showDestination: true,
-      maxDepartures: 3
-    },
-    
-    trainsSection: {
-      height: 140,
-      showPlatform: true,
-      showStopsAll: true,
-      maxDepartures: 3
-    },
-    
-    bottomBar: {
-      height: 120,
-      showWeather: true,
-      showNews: true,
-      showDisruptions: true
-    }
+  weather: {
+    enabled: true,
+    city: 'Melbourne',
+    // If you have an API key, set WEATHER_API_KEY env var; otherwise it will skip gracefully
   },
 
-  // ===== TYPOGRAPHY =====
-  fonts: {
-    // Main display font
-    main: 'Arial',
-    
-    // Font sizes
-    sizes: {
-      title: 28,           // Section headers
-      time: 56,            // Current time
-      destination: 24,     // Train/tram destinations
-      minutes: 36,         // Time until departure
-      platform: 20,        // Platform numbers
-      weather: 22,         // Weather info
-      news: 18,            // News ticker
-      small: 16            // Small labels
-    },
-    
-    // Font weights
-    weights: {
-      light: 'normal',
-      regular: 'normal',
-      bold: 'bold'
-    }
+  news: { enabled: false },
+
+  // Feature toggles for data sources
+  sources: {
+    gtfsStatic: { enabled: true },         // Always needed for base schedule & stop mapping
+    gtfsRealtimeTrams: { enabled: true },  // Uses DTP Yarra Trams public GTFS-R (no keys)
+    gtfsRealtimeTrains: { enabled: false },// Off by default unless you wire train GTFS-R
+    ptvTimetable: { enabled: false },      // Requires dev ID & HMAC (403 without it)
+    tramTracker:  { enabled: false }       // Unreliable server-to-server; keep off by default
   },
 
-  // ===== TEXT LABELS =====
-  labels: {
-    // Section headers
-    trainsHeader: 'TRAINS - SOUTH YARRA',
-    tramsHeader: 'TRAMS - ROUTE 58 FROM TIVOLI RD',
-    
-    // Status indicators
-    stopsAll: 'STOPS ALL',
-    express: 'EXPRESS',
-    
-    // Coffee decision
-    coffeeGo: 'GET COFFEE',
-    coffeeHurry: 'RUSH IT!',
-    coffeeNo: 'NO TIME',
-    
-    // Time formats
-    timeFormat: '12h',    // 12h or 24h
-    showSeconds: false
+  // Advanced
+  timeouts: {
+    defaultMs: 8000,
+    tramTrackerMs: 12000
   },
 
-  // ===== BEHAVIOR =====
-  behavior: {
-    // Refresh intervals (milliseconds)
-    partialRefresh: 20000,   // 20 seconds
-    fullRefresh: 300000,     // 5 minutes
-    
-    // Data display
-    showDataSource: true,     // Show "PTV-API", "GTFS", etc
-    showLastUpdate: false,    // Show last update time
-    
-    // Coffee decision
-    coffeeArrivalTime: '09:00',  // Target arrival at 80 Collins
-    coffeeWalkTime: 10,          // Minutes to walk from station
-    coffeeShopTime: 5            // Minutes to get coffee
-  },
-
-  // ===== STOP CONFIGURATION =====
-  stops: {
-    // Train stop
-    train: {
-      name: 'South Yarra',
-      // UPDATED: Using 19946 (Platform 5) instead of 1120 (Parent) 
-      // to ensure "0 departures" error is fixed.
-      stopId: 19946,            // PTV stop ID 
-      platform: 5,              // Platform number
-      gtfsStopId: '19946'       // GTFS stop ID
-    },
-    
-    // Tram stop
-    tram: {
-      name: 'Tivoli Road',
-      stopId: 2189,            // TramTracker ID
-      route: 58,               // Route number
-      direction: 'West Coburg'
-    },
-    
-    // Destination for coffee decision
-    destination: {
-      name: '80 Collins St',
-      walkTime: 10             // Minutes from train station
-    }
-  },
-
-  // ===== DATA SOURCES =====
-  dataSources: {
-    // Priority order for trains
-    trainsPriority: ['PTV', 'GTFS', 'Simulation'],
-    
-    // Priority order for trams
-    tramsPriority: ['TramTracker', 'PTV', 'GTFS', 'Simulation'],
-    
-    // API endpoints (don't change unless you know what you're doing)
-    tramTrackerUrl: 'https://www.tramtracker.com.au/Controllers',
-    ptvUrl: 'https://timetableapi.ptv.vic.gov.au/v3',
-    gtfsUrl: 'https://api.opendata.transport.vic.gov.au/opendata/public-transport/gtfs/realtime/v1'
-  },
-
-  // ===== DEBUG =====
-  debug: {
-    showBoundingBoxes: false,   // Show layout boxes
-    verboseLogging: true,       // Log data source attempts
-    simulateDataSource: null    // Force a data source: 'PTV', 'GTFS', 'Simulation'
+  ui: {
+    screen: { width: 800, height: 480 },
+    fonts: { base: 20, small: 14, large: 28 },
+    theme: { fg: '#000', bg: '#fff', accent: '#000' }
   }
 };
+``

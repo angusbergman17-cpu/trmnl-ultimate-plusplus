@@ -1,101 +1,53 @@
-require('dotenv').config(); // Load environment variables
+
+// server.js
 const express = require('express');
-const DataScraper = require('./data-scraper-ultimate-plus');
-const CoffeeDecision = require('./coffee-decision');
-const PidsRenderer = require('./pids-renderer');
-const sharp = require('sharp'); 
+const path = require('path');
+const { scrapeAll } = require('./data-scraper-ultimate-plus');
+const config = require('./config');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-const scraper = new DataScraper();
-const coffeeLogic = new CoffeeDecision();
-const renderer = new PidsRenderer();
+// simple in-memory cache
+let lastData = null;
+let lastRendered = 0;
 
-let currentImageBuffer = null;
-let lastUpdateTime = null;
-
-app.use(express.json());
-
-app.use((req, res, next) => {
-  if (req.url !== '/') console.log(`[${new Date().toLocaleTimeString()}] 📨 ${req.method} ${req.url}`);
-  next();
+app.get('/api/status', (req, res) => {
+  res.json({ ok: true, ts: new Date().toISOString() });
 });
 
-async function refreshCycle() {
-  console.log("♻️  Refreshing Data...");
+app.get('/api/data', async (req, res) => {
   try {
-    // 1. Fetch Data with hard fallback
-    // If scraper fails, return SAFE empty arrays
-    const data = await scraper.fetchAllData().catch(e => {
-        console.error("Scraper Critical Fail:", e.message);
-        return { 
-            trains: [], 
-            trams: [], 
-            weather: {temp: '--', condition: 'Offline', icon: '?'}, 
-            news: 'Offline' 
-        };
-    });
-
-    // 2. Safe Logic Access
-    const nextTrainMin = (data.trains && data.trains[0]) ? data.trains[0].minutes : 99;
-    
-    // 3. EXECUTE LOGIC (Now safe because calculate() is restored)
-    const coffee = coffeeLogic.calculate(nextTrainMin, data.trams || [], data.news || "");
-
-    // 4. Render
-    currentImageBuffer = await renderer.render(data, coffee, true);
-    lastUpdateTime = new Date();
-    console.log("📸 Image Updated Successfully");
-
-  } catch (error) {
-    console.error("CRITICAL CYCLE FAILURE:", error.message);
-    if (error.stack) console.error(error.stack);
-  }
-}
-
-app.get('/api/live-image.png', async (req, res) => {
-  res.set('Content-Type', 'image/png');
-  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
-
-  if (currentImageBuffer) {
-      res.send(currentImageBuffer);
-  } else {
-      console.log("⚠️ Cache empty. Serving Loading Placeholder.");
-      try {
-        const loadingSvg = `<svg width="800" height="480" xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="white"/><text x="400" y="240" font-size="50" font-family="sans-serif" font-weight="bold" text-anchor="middle" fill="black">SYSTEM STARTING</text></svg>`;
-        const buffer = await sharp(Buffer.from(loadingSvg)).png().toBuffer();
-        res.send(buffer);
-        if (!lastUpdateTime) refreshCycle();
-      } catch (e) { res.status(500).send("Server Error"); }
+    // refresh each cycle
+    if (!lastData || (Date.now() - lastRendered) > (config.app.refreshSeconds * 1000)) {
+      lastData = await scrapeAll();
+      lastRendered = Date.now();
+      console.log('♻️  Refreshing Data...');
+    }
+    res.json(lastData);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-app.all('/api/screen', (req, res) => {
-   // Use the actual host from the request, or fall back to Render URL
-   const host = req.get('host') || 'trmnl-ultimate-plusplus.onrender.com';
-   const protocol = req.protocol || 'https';
-   const imageUrl = `${protocol}://${host}/api/live-image.png?t=${Date.now()}`;
-   res.json({ markup: `<div class="view" style="padding:0; margin:0; background:white;"><img src="${imageUrl}" style="width:100%;" /></div>` });
+// Example TRMNL endpoints (stubbed)
+app.post('/api/screen', (req, res) => {
+  console.log(`[${new Date().toLocaleTimeString()}] 📨 POST /api/screen`);
+  res.json({ ok: true });
+});
+app.get('/api/live-image.png', (req, res) => {
+  console.log(`[${new Date().toLocaleTimeString()}] 📨 GET /api/live-image.png${req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''}`);
+  // You can integrate rendering pipeline here; for now, return 1x1 PNG
+  const png1x1 = Buffer.from('89504E470D0A1A0A0000000D494844520000000100000001010300000025DB56CA00000003504C5445000000A7A7A7C5', 'hex');
+  res.setHeader('Content-Type', 'image/png');
+  res.send(png1x1);
 });
 
-setInterval(refreshCycle, 60000); 
-setTimeout(refreshCycle, 1000);   
-
-app.get('/', (req, res) => res.send("TRMNL Server Online"));
-
-// Debug endpoint to check environment variables
-app.get('/debug/env', (req, res) => {
-  const key = process.env.GTFS_API_KEY || '';
-  res.json({
-    GTFS_API_KEY_present: !!process.env.GTFS_API_KEY,
-    GTFS_API_KEY_length: key.length,
-    GTFS_API_KEY_preview: key ? key.substring(0, 10) + '...' : 'NOT SET',
-    GTFS_API_KEY_bytes: key ? Array.from(key.substring(0, 15)).map(c => c.charCodeAt(0)) : [],
-    GTFS_API_KEY_full_for_debug: key, // TEMPORARY - remove this after debugging!
-    WEATHER_KEY_present: !!process.env.WEATHER_KEY,
-    all_env_keys: Object.keys(process.env).filter(k => k.includes('GTFS') || k.includes('WEATHER'))
-  });
+// Root page: basic info
+app.get('/', (req, res) => {
+  res.type('text/plain').send('TRMNL ULTIMATE++ is running.\nSee /api/data for JSON.');
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+const port = config.app.port;
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});

@@ -99,7 +99,7 @@ module.exports = {
   // ===== TEXT LABELS =====
   labels: {
     // Section headers
-    trainsHeader: 'TRAINS - SOUTH YARRA PLATFORM 3',
+    trainsHeader: 'TRAINS - SOUTH YARRA',
     tramsHeader: 'TRAMS - ROUTE 58 FROM TIVOLI RD',
     
     // Status indicators
@@ -138,8 +138,8 @@ module.exports = {
     train: {
       name: 'South Yarra',
       stopId: 1120,           // PTV stop ID
-      platform: 3,             // Platform number
-      gtfsStopId: '19842'     // GTFS stop ID
+      platform: 5,             // Platform number
+      gtfsStopId: '19946'     // GTFS stop ID
     },
     
     // Tram stop
